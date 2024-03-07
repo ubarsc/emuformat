@@ -14,4 +14,8 @@ set (EMU_VERSION_PATCH 0)
 find_package(GDAL)
 find_package(ZLIB)
 
+add_library(gdal_EMU emudataset.cpp)
+# remove the leading "lib" as GDAL won't look for files with this prefix
+set_target_properties(gdal_EMU PROPERTIES PREFIX "")
 
+install (TARGETS gdal_EMU DESTINATION lib/gdalplugins)
