@@ -5,7 +5,6 @@
 #include <mutex>
 #include <thread>
 #include <unordered_map>
-#include <hash>
 
 const int COMPRESSION_NONE = 0;
 const int COMPRESSION_ZLIB = 1;
@@ -20,15 +19,15 @@ struct EMUTileKey
     bool operator==(const EMUTileKey &other) const
     {
         return (ovrLevel == other.ovrLevel
-            && band = other.band
-            && x == ovrLevel.x && y == ovrLevel.y);
+            && band == other.band
+            && x == other.x && y == other.y);
     }
 };
 
 template <>
 struct std::hash<EMUTileKey>
 {
-    std::size_t operator()(const Key& k) const
+    std::size_t operator()(const EMUTileKey& k) const
     {
         std::size_t h1 = std::hash<uint64_t>{}(k.ovrLevel);
         std::size_t h2 = std::hash<uint64_t>{}(k.band);
@@ -36,7 +35,13 @@ struct std::hash<EMUTileKey>
         std::size_t h4 = std::hash<uint64_t>{}(k.y);
         return h1 ^ (h2 << 1) ^ (h3 << 2) ^ (h4 << 3);
     }
-}
+};
+
+struct EMUTileValue
+{
+    vsi_l_offset offset;
+    uint64_t size;
+};
 
 class EMUDataset final: public GDALPamDataset
 {
@@ -54,23 +59,38 @@ public:
     CPLErr GetGeoTransform( double * padfTransform ) override;
     CPLErr SetGeoTransform( double * padfTransform ) override;
     const OGRSpatialReference* GetSpatialRef() const override;
-    CPLErr GetSpatialRef(const OGRSpatialReference*) override;
+    CPLErr SetSpatialRef(const OGRSpatialReference*) override;
     CPLErr Close() override;
     
 private:
-    void setTileOffset(uint64_t o, uint64_t band, uint64_t x, uint64_t y, vsi_l_offset offset);
-    vsi_l_offset getTileOffset(uint64_t o, uint64_t band, uint64_t x, uint64_t y);
+    void setTileOffset(uint64_t o, uint64_t band, uint64_t x, 
+        uint64_t y, vsi_l_offset offset, uint64_t size);
+    EMUTileValue getTileOffset(uint64_t o, uint64_t band, uint64_t x, uint64_t y);
 
 
     VSILFILE  *m_fp = nullptr;
     OGRSpatialReference m_oSRS{};
-    std::unordered_map<EMUTileKey, vsi_l_offset> m_tileOffsets;
+    std::unordered_map<EMUTileKey, EMUTileValue> m_tileOffsets;
     double m_padfTransform[6];
     uint64_t m_tileSize;
     std::mutex m_mutex;
     
     friend class EMURasterBand;
 };
+
+class EMURasterBand final: public GDALPamRasterBand
+{
+public:
+    EMURasterBand(EMUDataset *, int nBandIn, GDALDataType eType);
+    ~EMURasterBand();
+    
+    virtual CPLErr IReadBlock( int, int, void * ) override;
+    virtual CPLErr IWriteBlock( int, int, void * ) override;
+    
+private:
+    friend class EMUDataset;
+};
+
 
 EMUDataset::EMUDataset(VSILFILE *fp)
 {
@@ -91,7 +111,7 @@ EMUDataset::~EMUDataset()
 
 CPLErr EMUDataset::Close()
 {
-    CPLErr sErr = CE_None;
+    CPLErr eErr = CE_None;
     if( nOpenFlags != OPEN_FLAGS_CLOSED )
     {
         if( FlushCache(true) != CE_None )
@@ -101,65 +121,67 @@ CPLErr EMUDataset::Close()
         {
             // now write header
             vsi_l_offset headerOffset = VSIFTellL(m_fp);
-            VSIFWrite("HDR", 4, 1, m_fp);
+            VSIFWriteL("HDR", 4, 1, m_fp);
             
             // TODO: endianness
             uint64_t val = GetRasterCount();
-            VSIFWrite(&val, sizeof(val), 1, m_fp);
+            VSIFWriteL(&val, sizeof(val), 1, m_fp);
             
             val = GetRasterXSize();
-            VSIFWrite(&val, sizeof(val), 1, m_fp);
+            VSIFWriteL(&val, sizeof(val), 1, m_fp);
             
             val = GetRasterYSize();
-            VSIFWrite(&val, sizeof(val), 1, m_fp);
+            VSIFWriteL(&val, sizeof(val), 1, m_fp);
             
             // number of overviews
             val = 0;
-            VSIFWrite(&val, sizeof(val), 1, m_fp);
+            VSIFWriteL(&val, sizeof(val), 1, m_fp);
             
             // tilesize
-            VSIFWrite(&m_tileSize, sizeof(m_tileSize), 1, m_fp);
+            VSIFWriteL(&m_tileSize, sizeof(m_tileSize), 1, m_fp);
             
             // geo transform
-            VSIFWrite(&m_padfTransform, sizeof(m_padfTransform), 1, m_fp);
+            VSIFWriteL(&m_padfTransform, sizeof(m_padfTransform), 1, m_fp);
             
             // projection
             char *pszWKT;
             m_oSRS.exportToWkt(&pszWKT);
-            VSIFWrite(pszWKT, strlen(pszWKT) + 1, 1, m_fp);
+            VSIFWriteL(pszWKT, strlen(pszWKT) + 1, 1, m_fp);
             CPLFree(pszWKT);
             
             // number of tile offsets
             val = m_tileOffsets.size();
-            VSIFWrite(&val, sizeof(val), 1, m_fp);
+            VSIFWriteL(&val, sizeof(val), 1, m_fp);
             
             // now all the tile offsets
-            for( const std::pair<const EMUTileKey, vsi_l_offset>& n: m_tileOffsets)
+            for( const std::pair<const EMUTileKey, EMUTileValue>& n: m_tileOffsets)
             {
-                VSIFWrite(&n.second, sizeof(n.second), 1, m_fp);
-                VSIFWrite(&n.first.ovrLevel, sizeof(n.first.ovrLevel), 1, m_fp);
-                VSIFWrite(&n.first.band, sizeof(n.first.band), 1, m_fp);
-                VSIFWrite(&n.first.x, sizeof(n.first.x), 1, m_fp);
-                VSIFWrite(&n.first.y, sizeof(n.first.y), 1, m_fp);
+                VSIFWriteL(&n.second.offset, sizeof(n.second.offset), 1, m_fp);
+                VSIFWriteL(&n.second.size, sizeof(n.second.size), 1, m_fp);
+                VSIFWriteL(&n.first.ovrLevel, sizeof(n.first.ovrLevel), 1, m_fp);
+                VSIFWriteL(&n.first.band, sizeof(n.first.band), 1, m_fp);
+                VSIFWriteL(&n.first.x, sizeof(n.first.x), 1, m_fp);
+                VSIFWriteL(&n.first.y, sizeof(n.first.y), 1, m_fp);
             }
             
             // now the offset of the start of the header
-            VSIFWrite(&headerOffset, sizeof(headerOffset), 1, &m_fp);
+            VSIFWriteL(&headerOffset, sizeof(headerOffset), 1, m_fp);
                    
-            VSICloseL(m_fp);
+            VSIFCloseL(m_fp);
             m_fp = nullptr;
         }
     }
     return eErr;
 }
 
-void EMUDataset::setTileOffset(uint64_t o, uint64_t band, uint64_t x, uint64_t y, vsi_l_offset offset)
+void EMUDataset::setTileOffset(uint64_t o, uint64_t band, uint64_t x, 
+    uint64_t y, vsi_l_offset offset, uint64_t size)
 {
     const std::lock_guard<std::mutex> lock(m_mutex);
-    m_tileOffsets.insert({{o, band, x, y}, offset});
+    m_tileOffsets.insert({{o, band, x, y}, {offset, size}});
 }
 
-vsi_l_offset EMUDataset::getTileOffset(uint64_t o, uint64_t band, uint64_t x, uint64_t y)
+EMUTileValue EMUDataset::getTileOffset(uint64_t o, uint64_t band, uint64_t x, uint64_t y)
 {
     const std::lock_guard<std::mutex> lock(m_mutex);
     return m_tileOffsets[{o, band, x, y}];
@@ -173,7 +195,7 @@ GDALDataset *EMUDataset::Open(GDALOpenInfo *poOpenInfo)
 
 int EMUDataset::Identify(GDALOpenInfo *poOpenInfo)
 {
-    return nullptr;
+    return FALSE;
 }
 
 GDALDataset *EMUDataset::Create(const char * pszFilename,
@@ -182,7 +204,7 @@ GDALDataset *EMUDataset::Create(const char * pszFilename,
                                 char ** /* papszParamList */)
 {
     // Try to create the file.
-    FILE *fp = VSIFOpen(pszFilename, "w");
+    VSILFILE *fp = VSIFOpenL(pszFilename, "w");
     if( fp == NULL )
     {
         CPLError(CE_Failure, CPLE_OpenFailed,
@@ -191,13 +213,15 @@ GDALDataset *EMUDataset::Create(const char * pszFilename,
         return NULL;
     }
     
-    VSIFWrite("EMU", 4, 1, fp);
+    VSIFWriteL("EMU", 4, 1, fp);
     
-    EMUDataset *pDS new EMUDataset(fp);
-    for( int n = 0; n < nBands, n++ )
+    EMUDataset *pDS = new EMUDataset(fp);
+    for( int n = 0; n < nBands; n++ )
     {
         pDS->SetBand(n + 1, new EMURasterBand(pDS, n + 1, eType));
     }
+    
+    return pDS;
 }
 
 
@@ -221,30 +245,16 @@ CPLErr EMUDataset::SetGeoTransform( double * padfTransform )
     return CE_None;
 }
 
-const OGRSpatialReference* EMUDataset::GetSpatialRef()
+const OGRSpatialReference* EMUDataset::GetSpatialRef() const
 {
     return &m_oSRS;
 }
 
-CPLErr EMUDataset::GetSpatialRef(const OGRSpatialReference* poSRS)
+CPLErr EMUDataset::SetSpatialRef(const OGRSpatialReference* poSRS)
 {
     m_oSRS = *poSRS;
     return CE_None;
 }
-
-
-class EMURasterBand final: public GDALPamRasterBand
-{
-public:
-    EMURasterBand(EMUDataset *, int nBandIn, GDALDataType eType);
-    ~EMURasterBand();
-    
-    virtual CPLErr IReadBlock( int, int, void * ) override;
-    virtual CPLErr IWriteBlock( int, int, void * ) override;
-    
-private:
-    friend class EMUDataset;
-};
 
 EMURasterBand::EMURasterBand(EMUDataset *pDataset, int nBandIn, GDALDataType eType)
 {
@@ -261,26 +271,25 @@ CPLErr EMURasterBand::IReadBlock(int nBlockXOff, int nBlockYOff, void *pData)
     return CE_Failure;
 }
 
-CPLErr EMURasterBand::IWriteBlock(int nBlockXOff, int nBlockXOff, void *pData)
+CPLErr EMURasterBand::IWriteBlock(int nBlockXOff, int nBlockYOff, void *pData)
 {
     EMUDataset *poEMUDS = cpl::down_cast<EMUDataset *>(poDS);
     
-    vsi_l_offset tileOffset = VSIFTellL(m_fp);
+    vsi_l_offset tileOffset = VSIFTellL(poEMUDS->m_fp);
     int typeSize = GDALGetDataTypeSize(eDataType) / 8;
     
     // size of block
     uint64_t blockSize = (nBlockXSize * typeSize) * (nBlockYSize * typeSize);
-    VSIFWrite(&blockSize, sizeof(blockSize), 1, m_fp);
     
     // TODO: compression
     uint64_t compression = COMPRESSION_NONE;
-    VSIFWrite(&val, sizeof(compression), 1, m_fp);
+    VSIFWriteL(&compression, sizeof(compression), 1, poEMUDS->m_fp);
 
     // data
-    VSIFWrite(pData, blockSize, 1, m_fp);
+    VSIFWriteL(pData, blockSize, 1, poEMUDS->m_fp);
     
     // update map
-    poEMUDS->setTileOffset(0, nBand, nBlockXOff, nBlockXOff, tileOffset);
+    poEMUDS->setTileOffset(0, nBand, nBlockXOff, nBlockXOff, tileOffset, blockSize);
     
     return CE_None;
 }
