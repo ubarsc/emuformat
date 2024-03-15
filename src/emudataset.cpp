@@ -48,7 +48,7 @@ struct EMUTileValue
 class EMUDataset final: public GDALDataset
 {
 public:
-    EMUDataset(VSILFILE *, GDALDataType eType, int nXSize, int nYSize);
+    EMUDataset(VSILFILE *, GDALDataType eType, int nXSize, int nYSize, GDALAccess eInAccess);
     ~EMUDataset();
 
     static GDALDataset *Open( GDALOpenInfo * );
@@ -84,7 +84,7 @@ private:
 class EMURasterBand final: public GDALRasterBand
 {
 public:
-    EMURasterBand(EMUDataset *, int nBandIn, GDALDataType eType);
+    EMURasterBand(EMUDataset *, int nBandIn, GDALDataType eType, bool bThematic);
     ~EMURasterBand();
     
     virtual CPLErr IReadBlock( int, int, void * ) override;
@@ -98,15 +98,17 @@ public:
     virtual CPLErr SetNoDataValueAsUInt64(uint64_t nNoData) override;
     virtual CPLErr DeleteNoDataValue() override;
      
+    bool GetThematic() { return m_bThematic;};
 private:
     bool m_bNoDataSet;
     int64_t m_nNoData;
+    bool m_bThematic;
 
     friend class EMUDataset;
 };
 
 
-EMUDataset::EMUDataset(VSILFILE *fp, GDALDataType eType, int nXSize, int nYSize)
+EMUDataset::EMUDataset(VSILFILE *fp, GDALDataType eType, int nXSize, int nYSize, GDALAccess eInAccess)
 {
     m_fp = fp;
     for( int i = 0; i < 6; i++ )
@@ -117,6 +119,7 @@ EMUDataset::EMUDataset(VSILFILE *fp, GDALDataType eType, int nXSize, int nYSize)
     m_eType = eType;
     nRasterXSize = nXSize;
     nRasterYSize = nYSize; 
+    eAccess = eInAccess;
     
     // TODO: allow override
     m_tileSize = 512;
@@ -130,7 +133,7 @@ EMUDataset::~EMUDataset()
 CPLErr EMUDataset::Close()
 {
     CPLErr eErr = CE_None;
-    if( nOpenFlags != OPEN_FLAGS_CLOSED )
+    if( (nOpenFlags != OPEN_FLAGS_CLOSED ) && (eAccess == GA_Update) )
     {
         if( FlushCache(true) != CE_None )
             eErr = CE_Failure;
@@ -158,16 +161,20 @@ CPLErr EMUDataset::Close()
             val = 0;
             VSIFWriteL(&val, sizeof(val), 1, m_fp);
             
+            // TODO: info on each overview here
+            
             // nodata for each band. 
             for( int n = 0; n < GetRasterCount(); n++ )
             {
-                GDALRasterBand *pBand = GetRasterBand(n + 1);
+                EMURasterBand *pBand = cpl::down_cast<EMURasterBand*>(GetRasterBand(n + 1));
                 int nNoDataSet;
                 int64_t nodata = pBand->GetNoDataValueAsInt64(&nNoDataSet);
                 // coerce so we know the size
                 uint8_t n8NoDataSet = nNoDataSet;
                 VSIFWriteL(&n8NoDataSet, sizeof(n8NoDataSet), 1, m_fp);
                 VSIFWriteL(&nodata, sizeof(nodata), 1, m_fp);
+                uint8_t nThematic = pBand->GetThematic();
+                VSIFWriteL(&nThematic, sizeof(nThematic), 1, m_fp);
             }
             
             // tilesize
@@ -236,12 +243,22 @@ GDALDataset *EMUDataset::Open(GDALOpenInfo *poOpenInfo)
                  "datasets.");
         return nullptr;
     }
+
+    if( (poOpenInfo->pabyHeader[0] != 'E') && 
+        (poOpenInfo->pabyHeader[1] != 'M') &&
+        (poOpenInfo->pabyHeader[2] != 'U') )
+    {
+        return nullptr;
+    }
+    
+    // TODO: get version    
     
     // Check that the file pointer from GDALOpenInfo* is available.
     if( poOpenInfo->fpL == nullptr )
     {
         return nullptr;
     }
+    
 
     // seek to the end of the file
     VSIFSeekL(poOpenInfo->fpL, 0 , SEEK_END);
@@ -283,7 +300,7 @@ GDALDataset *EMUDataset::Open(GDALOpenInfo *poOpenInfo)
     std::swap(fp, poOpenInfo->fpL);
 
     GDALDataType eType = (GDALDataType)ftype;
-    EMUDataset *pDS = new EMUDataset(fp, eType, xsize, ysize);
+    EMUDataset *pDS = new EMUDataset(fp, eType, xsize, ysize, GA_ReadOnly);
 
     // nodata for each band. 
     for( int n = 0; n < count; n++ )
@@ -292,8 +309,10 @@ GDALDataset *EMUDataset::Open(GDALOpenInfo *poOpenInfo)
         VSIFReadL(&n8NoDataSet, sizeof(n8NoDataSet), 1, fp);
         int64_t nodata;
         VSIFReadL(&nodata, sizeof(nodata), 1, fp);
+        uint8_t nThematic;
+        VSIFReadL(&nThematic, sizeof(nThematic), 1, fp);
 
-        EMURasterBand *pBand = new EMURasterBand(pDS, n + 1, eType);
+        EMURasterBand *pBand = new EMURasterBand(pDS, n + 1, eType, nThematic);
         if(n8NoDataSet)
             pBand->SetNoDataValueAsInt64(nodata);
         
@@ -382,10 +401,10 @@ GDALDataset *EMUDataset::Create(const char * pszFilename,
     
     VSIFPrintfL(fp, "EMU%04d", EMU_VERSION);
     
-    EMUDataset *pDS = new EMUDataset(fp, eType, nXSize, nYSize);
+    EMUDataset *pDS = new EMUDataset(fp, eType, nXSize, nYSize, GA_Update);
     for( int n = 0; n < nBands; n++ )
     {
-        pDS->SetBand(n + 1, new EMURasterBand(pDS, n + 1, eType));
+        pDS->SetBand(n + 1, new EMURasterBand(pDS, n + 1, eType, false));
     }
     
     return pDS;
@@ -423,7 +442,7 @@ CPLErr EMUDataset::SetSpatialRef(const OGRSpatialReference* poSRS)
     return CE_None;
 }
 
-EMURasterBand::EMURasterBand(EMUDataset *pDataset, int nBandIn, GDALDataType eType)
+EMURasterBand::EMURasterBand(EMUDataset *pDataset, int nBandIn, GDALDataType eType, bool bThematic)
 {
     poDS = pDataset;
     nBlockXSize = 512;
@@ -432,6 +451,10 @@ EMURasterBand::EMURasterBand(EMUDataset *pDataset, int nBandIn, GDALDataType eTy
     eDataType = eType;
     m_bNoDataSet = false;
     m_nNoData = 0;
+    m_bThematic = bThematic;
+
+    nRasterXSize = pDataset->GetRasterXSize();          // ask the dataset for the total image size
+    nRasterYSize = pDataset->GetRasterYSize();
 }
 
 EMURasterBand::~EMURasterBand()
@@ -441,18 +464,52 @@ EMURasterBand::~EMURasterBand()
 
 CPLErr EMURasterBand::IReadBlock(int nBlockXOff, int nBlockYOff, void *pData)
 {
-    return CE_Failure;
+    EMUDataset *poEMUDS = cpl::down_cast<EMUDataset *>(poDS);
+
+    EMUTileValue val;
+    try
+    {
+        val = poEMUDS->getTileOffset(0, nBand, nBlockXOff, nBlockYOff);
+    }
+    catch(const std::out_of_range& oor)
+    {
+        CPLError(CE_Failure, CPLE_FileIO,
+                "Couldn't find index for block %d %d.",
+                nBlockXOff, nBlockXOff);
+        return CE_Failure;
+    }
+    
+    fprintf(stderr, "wqwddqw %d %d\n", (int)val.offset, (int)val.size);
+    VSIFSeekL(poEMUDS->m_fp, val.offset, SEEK_SET);
+    VSIFReadL(pData, val.size, 1, poEMUDS->m_fp);
+
+    return CE_None;
 }
 
 CPLErr EMURasterBand::IWriteBlock(int nBlockXOff, int nBlockYOff, void *pData)
 {
     EMUDataset *poEMUDS = cpl::down_cast<EMUDataset *>(poDS);
     
+    // GDAL deals in blocks - if we are at the end of a row
+    // we need to adjust the amount read so we don't go over the edge
+    int nxsize = this->nBlockXSize;
+    int nxtotalsize = this->nBlockXSize * (nBlockXOff + 1);
+    if( nxtotalsize > this->nRasterXSize )
+    {
+        nxsize -= (nxtotalsize - this->nRasterXSize);
+    }
+    int nysize = this->nBlockYSize;
+    int nytotalsize = this->nBlockYSize * (nBlockYOff + 1);
+    if( nytotalsize > this->nRasterYSize )
+    {
+        nysize -= (nytotalsize - this->nRasterYSize);
+    }
+    
     vsi_l_offset tileOffset = VSIFTellL(poEMUDS->m_fp);
     int typeSize = GDALGetDataTypeSize(eDataType) / 8;
     
     // size of block
-    uint64_t blockSize = (nBlockXSize * typeSize) * (nBlockYSize * typeSize);
+    uint64_t blockSize = (nxsize * typeSize) * (nysize * typeSize);
     
     // TODO: compression
     uint64_t compression = COMPRESSION_NONE;
@@ -462,7 +519,9 @@ CPLErr EMURasterBand::IWriteBlock(int nBlockXOff, int nBlockYOff, void *pData)
     VSIFWriteL(pData, blockSize, 1, poEMUDS->m_fp);
     
     // update map
-    poEMUDS->setTileOffset(0, nBand, nBlockXOff, nBlockXOff, tileOffset, blockSize);
+    poEMUDS->setTileOffset(0, nBand, nBlockXOff, nBlockYOff, tileOffset, blockSize);
+
+    // TODO: read data to work out stats and pyramid layers 
     
     return CE_None;
 }
