@@ -6,6 +6,8 @@
 #include <thread>
 #include <unordered_map>
 
+#include <cinttypes>
+
 const int COMPRESSION_NONE = 0;
 const int COMPRESSION_ZLIB = 1;
 
@@ -103,6 +105,7 @@ private:
     bool m_bNoDataSet;
     int64_t m_nNoData;
     bool m_bThematic;
+    std::unordered_map<uint32_t, uint32_t> histogram;
 
     friend class EMUDataset;
 };
@@ -244,8 +247,8 @@ GDALDataset *EMUDataset::Open(GDALOpenInfo *poOpenInfo)
         return nullptr;
     }
 
-    if( (poOpenInfo->pabyHeader[0] != 'E') && 
-        (poOpenInfo->pabyHeader[1] != 'M') &&
+    if( (poOpenInfo->pabyHeader[0] != 'E') || 
+        (poOpenInfo->pabyHeader[1] != 'M') ||
         (poOpenInfo->pabyHeader[2] != 'U') )
     {
         return nullptr;
@@ -336,7 +339,7 @@ GDALDataset *EMUDataset::Open(GDALOpenInfo *poOpenInfo)
     delete[] pszWKT;
     
     uint64_t ntiles;
-    VSIFReadL(&wktSize, sizeof(wktSize), 1, fp);
+    VSIFReadL(&ntiles, sizeof(ntiles), 1, fp);
     
     for( uint64_t n = 0; n < ntiles; n++ )
     {
@@ -478,10 +481,43 @@ CPLErr EMURasterBand::IReadBlock(int nBlockXOff, int nBlockYOff, void *pData)
                 nBlockXOff, nBlockXOff);
         return CE_Failure;
     }
-    
-    fprintf(stderr, "wqwddqw %d %d\n", (int)val.offset, (int)val.size);
+
+    // seek to where this block starts    
     VSIFSeekL(poEMUDS->m_fp, val.offset, SEEK_SET);
-    VSIFReadL(pData, val.size, 1, poEMUDS->m_fp);
+
+    // TODO: compression
+    uint64_t compression;
+    VSIFReadL(&compression, sizeof(compression), 1, poEMUDS->m_fp);
+    
+    // we need to work out whether we are partial
+    int nXValid, nYValid;
+    CPLErr err = GetActualBlockSize(nBlockXOff, nBlockYOff, &nXValid, &nYValid);
+    if( err != CE_None)
+        return err;
+    
+    if( (nXValid != nBlockXSize) || (nYValid != nBlockYSize) ) 
+    {
+        // partial. GDAL expects a full block so let's read the 
+        // partial and expand to fit full block.
+        int typeSize = GDALGetDataTypeSize(eDataType) / 8;
+        char *pSubData = static_cast<char*>(CPLMalloc(val.size));
+        VSIFReadL(pSubData, val.size, 1, poEMUDS->m_fp);
+        char *pDstData = static_cast<char*>(pData);
+        int nSrcIdx = 0, nDstIdx = 0;
+        for( int nRow = 0; nRow < nYValid; nRow++ )
+        {
+            memcpy(&pDstData[nDstIdx], &pSubData[nSrcIdx], nXValid * typeSize);
+            nSrcIdx += (nXValid * typeSize);
+            nDstIdx += (nBlockXSize * typeSize);
+        }
+        
+        CPLFree(pSubData);
+    }
+    else
+    {
+        // full block. Just read.
+        VSIFReadL(pData, val.size, 1, poEMUDS->m_fp);
+    }
 
     return CE_None;
 }
@@ -492,31 +528,40 @@ CPLErr EMURasterBand::IWriteBlock(int nBlockXOff, int nBlockYOff, void *pData)
     
     // GDAL deals in blocks - if we are at the end of a row
     // we need to adjust the amount read so we don't go over the edge
-    int nxsize = this->nBlockXSize;
-    int nxtotalsize = this->nBlockXSize * (nBlockXOff + 1);
-    if( nxtotalsize > this->nRasterXSize )
-    {
-        nxsize -= (nxtotalsize - this->nRasterXSize);
-    }
-    int nysize = this->nBlockYSize;
-    int nytotalsize = this->nBlockYSize * (nBlockYOff + 1);
-    if( nytotalsize > this->nRasterYSize )
-    {
-        nysize -= (nytotalsize - this->nRasterYSize);
-    }
+    int nXValid, nYValid;
+    CPLErr err = GetActualBlockSize(nBlockXOff, nBlockYOff, &nXValid, &nYValid);
+    if( err != CE_None)
+        return err;
     
     vsi_l_offset tileOffset = VSIFTellL(poEMUDS->m_fp);
     int typeSize = GDALGetDataTypeSize(eDataType) / 8;
-    
-    // size of block
-    uint64_t blockSize = (nxsize * typeSize) * (nysize * typeSize);
-    
+
     // TODO: compression
     uint64_t compression = COMPRESSION_NONE;
     VSIFWriteL(&compression, sizeof(compression), 1, poEMUDS->m_fp);
 
-    // data
-    VSIFWriteL(pData, blockSize, 1, poEMUDS->m_fp);
+    size_t blockSize = (nXValid * nYValid) * typeSize;
+    
+    if( (nXValid != nBlockXSize) || (nYValid != nBlockYSize) ) 
+    {
+        // a partial block. They actually give the full block so we must subset
+        char *pSubData = static_cast<char*>(CPLMalloc(blockSize));
+        char *pSrcData = static_cast<char*>(pData);
+        int nSrcIdx = 0, nDstIdx = 0;
+        for( int nRow = 0; nRow < nYValid; nRow++ )
+        {
+            memcpy(&pSubData[nDstIdx], &pSrcData[nSrcIdx], nXValid * typeSize);
+            nSrcIdx += (nBlockXSize * typeSize);
+            nDstIdx += (nXValid * typeSize);
+        }
+        VSIFWriteL(pSubData, blockSize, 1, poEMUDS->m_fp);
+        CPLFree(pSubData);    
+    }
+    else
+    {
+        // full data
+        VSIFWriteL(pData, blockSize, 1, poEMUDS->m_fp);
+    }
     
     // update map
     poEMUDS->setTileOffset(0, nBand, nBlockXOff, nBlockYOff, tileOffset, blockSize);
