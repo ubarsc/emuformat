@@ -6,7 +6,7 @@
 #include <thread>
 #include <unordered_map>
 
-#include <cinttypes>
+#include "zlib.h"
 
 const int COMPRESSION_NONE = 0;
 const int COMPRESSION_ZLIB = 1;
@@ -22,9 +22,9 @@ struct EMUTileKey
     
     bool operator==(const EMUTileKey &other) const
     {
-        return (ovrLevel == other.ovrLevel
-            && band == other.band
-            && x == other.x && y == other.y);
+        return ((ovrLevel == other.ovrLevel)
+            && (band == other.band)
+            && (x == other.x) && (y == other.y));
     }
 };
 
@@ -45,6 +45,7 @@ struct EMUTileValue
 {
     vsi_l_offset offset;
     uint64_t size;
+    uint64_t uncompressedSize;
 };
 
 class EMUDataset final: public GDALDataset
@@ -68,7 +69,7 @@ public:
     
 private:
     void setTileOffset(uint64_t o, uint64_t band, uint64_t x, 
-        uint64_t y, vsi_l_offset offset, uint64_t size);
+        uint64_t y, vsi_l_offset offset, uint64_t size, uint64_t uncompressedSize);
     EMUTileValue getTileOffset(uint64_t o, uint64_t band, uint64_t x, uint64_t y);
 
 
@@ -77,7 +78,7 @@ private:
     std::unordered_map<EMUTileKey, EMUTileValue> m_tileOffsets;
     double m_padfTransform[6];
     uint64_t m_tileSize;
-    std::mutex m_mutex;
+    std::shared_ptr<std::mutex> m_mutex;
     GDALDataType m_eType;
     
     friend class EMURasterBand;
@@ -86,7 +87,7 @@ private:
 class EMURasterBand final: public GDALRasterBand
 {
 public:
-    EMURasterBand(EMUDataset *, int nBandIn, GDALDataType eType, bool bThematic);
+    EMURasterBand(EMUDataset *, int nBandIn, GDALDataType eType, bool bThematic, const std::shared_ptr<std::mutex>& other);
     ~EMURasterBand();
     
     virtual CPLErr IReadBlock( int, int, void * ) override;
@@ -106,6 +107,7 @@ private:
     int64_t m_nNoData;
     bool m_bThematic;
     std::unordered_map<uint32_t, uint32_t> histogram;
+    std::shared_ptr<std::mutex> m_mutex;
 
     friend class EMUDataset;
 };
@@ -126,6 +128,8 @@ EMUDataset::EMUDataset(VSILFILE *fp, GDALDataType eType, int nXSize, int nYSize,
     
     // TODO: allow override
     m_tileSize = 512;
+    
+    m_mutex = std::make_shared<std::mutex>();
 }
 
 EMUDataset::~EMUDataset()
@@ -135,6 +139,8 @@ EMUDataset::~EMUDataset()
 
 CPLErr EMUDataset::Close()
 {
+    const std::lock_guard<std::mutex> lock(*m_mutex);
+
     CPLErr eErr = CE_None;
     if( (nOpenFlags != OPEN_FLAGS_CLOSED ) && (eAccess == GA_Update) )
     {
@@ -203,6 +209,7 @@ CPLErr EMUDataset::Close()
             {
                 VSIFWriteL(&n.second.offset, sizeof(n.second.offset), 1, m_fp);
                 VSIFWriteL(&n.second.size, sizeof(n.second.size), 1, m_fp);
+                VSIFWriteL(&n.second.uncompressedSize, sizeof(n.second.uncompressedSize), 1, m_fp);
                 VSIFWriteL(&n.first.ovrLevel, sizeof(n.first.ovrLevel), 1, m_fp);
                 VSIFWriteL(&n.first.band, sizeof(n.first.band), 1, m_fp);
                 VSIFWriteL(&n.first.x, sizeof(n.first.x), 1, m_fp);
@@ -220,15 +227,13 @@ CPLErr EMUDataset::Close()
 }
 
 void EMUDataset::setTileOffset(uint64_t o, uint64_t band, uint64_t x, 
-    uint64_t y, vsi_l_offset offset, uint64_t size)
+    uint64_t y, vsi_l_offset offset, uint64_t size, uint64_t uncompressedSize)
 {
-    const std::lock_guard<std::mutex> lock(m_mutex);
-    m_tileOffsets.insert({{o, band, x, y}, {offset, size}});
+    m_tileOffsets.insert({{o, band, x, y}, {offset, size, uncompressedSize}});
 }
 
 EMUTileValue EMUDataset::getTileOffset(uint64_t o, uint64_t band, uint64_t x, uint64_t y)
 {
-    const std::lock_guard<std::mutex> lock(m_mutex);
     return m_tileOffsets[{o, band, x, y}];
 }
 
@@ -315,7 +320,7 @@ GDALDataset *EMUDataset::Open(GDALOpenInfo *poOpenInfo)
         uint8_t nThematic;
         VSIFReadL(&nThematic, sizeof(nThematic), 1, fp);
 
-        EMURasterBand *pBand = new EMURasterBand(pDS, n + 1, eType, nThematic);
+        EMURasterBand *pBand = new EMURasterBand(pDS, n + 1, eType, nThematic, pDS->m_mutex);
         if(n8NoDataSet)
             pBand->SetNoDataValueAsInt64(nodata);
         
@@ -347,6 +352,8 @@ GDALDataset *EMUDataset::Open(GDALOpenInfo *poOpenInfo)
         VSIFReadL(&offset, sizeof(offset), 1, fp);
         uint64_t size;
         VSIFReadL(&size, sizeof(size), 1, fp);
+        uint64_t uncompressedSize;
+        VSIFReadL(&uncompressedSize, sizeof(uncompressedSize), 1, fp);
         uint64_t ovrLevel;
         VSIFReadL(&ovrLevel, sizeof(ovrLevel), 1, fp);
         uint64_t band;
@@ -356,7 +363,7 @@ GDALDataset *EMUDataset::Open(GDALOpenInfo *poOpenInfo)
         uint64_t y;
         VSIFReadL(&y, sizeof(y), 1, fp);
         
-        pDS->setTileOffset(ovrLevel, band, x, y, offset, size);
+        pDS->setTileOffset(ovrLevel, band, x, y, offset, size, uncompressedSize);
     }
 
     return pDS;
@@ -407,7 +414,7 @@ GDALDataset *EMUDataset::Create(const char * pszFilename,
     EMUDataset *pDS = new EMUDataset(fp, eType, nXSize, nYSize, GA_Update);
     for( int n = 0; n < nBands; n++ )
     {
-        pDS->SetBand(n + 1, new EMURasterBand(pDS, n + 1, eType, false));
+        pDS->SetBand(n + 1, new EMURasterBand(pDS, n + 1, eType, false, pDS->m_mutex));
     }
     
     return pDS;
@@ -445,7 +452,8 @@ CPLErr EMUDataset::SetSpatialRef(const OGRSpatialReference* poSRS)
     return CE_None;
 }
 
-EMURasterBand::EMURasterBand(EMUDataset *pDataset, int nBandIn, GDALDataType eType, bool bThematic)
+EMURasterBand::EMURasterBand(EMUDataset *pDataset, int nBandIn, GDALDataType eType, 
+        bool bThematic, const std::shared_ptr<std::mutex>& other)
 {
     poDS = pDataset;
     nBlockXSize = 512;
@@ -458,6 +466,8 @@ EMURasterBand::EMURasterBand(EMUDataset *pDataset, int nBandIn, GDALDataType eTy
 
     nRasterXSize = pDataset->GetRasterXSize();          // ask the dataset for the total image size
     nRasterYSize = pDataset->GetRasterYSize();
+    
+    m_mutex = other;
 }
 
 EMURasterBand::~EMURasterBand()
@@ -465,8 +475,39 @@ EMURasterBand::~EMURasterBand()
     
 }
 
+void doUncompression(int type, Bytef *pInput, size_t inputSize, Bytef *pOutput, size_t pnOutputSize)
+{
+    if( type == COMPRESSION_NONE )
+    {
+        memcpy(pOutput, pInput, inputSize);
+    }
+    else if( type == COMPRESSION_ZLIB )
+    {
+        z_stream infstream;
+        infstream.zalloc = Z_NULL;
+        infstream.zfree = Z_NULL;
+        infstream.opaque = Z_NULL;
+        infstream.avail_in = inputSize;
+        infstream.next_in = pInput;
+        infstream.avail_out = pnOutputSize;
+        infstream.next_out = pOutput;
+         
+        // the actual DE-compression work.
+        inflateInit(&infstream);
+        inflate(&infstream, Z_NO_FLUSH);
+        inflateEnd(&infstream);
+    } 
+    else
+    {
+        fprintf(stderr, "Unknown compression type\n");
+    }
+
+}
+
 CPLErr EMURasterBand::IReadBlock(int nBlockXOff, int nBlockYOff, void *pData)
 {
+    const std::lock_guard<std::mutex> lock(*m_mutex);
+
     EMUDataset *poEMUDS = cpl::down_cast<EMUDataset *>(poDS);
 
     EMUTileValue val;
@@ -500,30 +541,80 @@ CPLErr EMURasterBand::IReadBlock(int nBlockXOff, int nBlockYOff, void *pData)
         // partial. GDAL expects a full block so let's read the 
         // partial and expand to fit full block.
         int typeSize = GDALGetDataTypeSize(eDataType) / 8;
-        char *pSubData = static_cast<char*>(CPLMalloc(val.size));
+        Bytef *pSubData = static_cast<Bytef*>(CPLMalloc(val.size));
         VSIFReadL(pSubData, val.size, 1, poEMUDS->m_fp);
+        
+        Bytef *pUncompressed = static_cast<Bytef*>(CPLMalloc(val.uncompressedSize)); 
+        doUncompression(compression, pSubData, val.size, pUncompressed, val.uncompressedSize);
+        
         char *pDstData = static_cast<char*>(pData);
         int nSrcIdx = 0, nDstIdx = 0;
         for( int nRow = 0; nRow < nYValid; nRow++ )
         {
-            memcpy(&pDstData[nDstIdx], &pSubData[nSrcIdx], nXValid * typeSize);
+            memcpy(&pDstData[nDstIdx], &pUncompressed[nSrcIdx], nXValid * typeSize);
             nSrcIdx += (nXValid * typeSize);
             nDstIdx += (nBlockXSize * typeSize);
         }
         
+        CPLFree(pUncompressed);
         CPLFree(pSubData);
     }
     else
     {
         // full block. Just read.
-        VSIFReadL(pData, val.size, 1, poEMUDS->m_fp);
+        Bytef *pSubData = static_cast<Bytef*>(CPLMalloc(val.size));
+        VSIFReadL(pSubData, val.size, 1, poEMUDS->m_fp);
+        // uncompress directly into GDAL's buffer
+        doUncompression(compression, pSubData, val.size, static_cast<Bytef*>(pData), val.uncompressedSize);
+        CPLFree(pSubData);        
     }
 
     return CE_None;
 }
 
+// https://gist.github.com/arq5x/5315739
+Bytef* doCompression(int type, Bytef *pInput, size_t inputSize, size_t *pnOutputSize, bool *pbFree) 
+{
+    if( type == COMPRESSION_NONE )
+    {
+        // do nothing
+        *pnOutputSize = inputSize;
+        *pbFree = false;
+        return pInput;
+    }
+    else if( type == COMPRESSION_ZLIB )
+    {
+        Bytef *pOutput = static_cast<Bytef*>(CPLMalloc(inputSize));
+    
+        z_stream defstream;
+        defstream.zalloc = Z_NULL;
+        defstream.zfree = Z_NULL;
+        defstream.opaque = Z_NULL;
+        defstream.avail_in = inputSize;
+        defstream.next_in = pInput;
+        defstream.avail_out = inputSize;
+        defstream.next_out = pOutput;
+        
+        // the actual compression work.
+        deflateInit(&defstream, Z_BEST_COMPRESSION);
+        deflate(&defstream, Z_FINISH);
+        deflateEnd(&defstream);
+        
+        *pnOutputSize = defstream.total_out;
+        *pbFree = true;
+        return pOutput;
+    } 
+    else
+    {
+        fprintf(stderr, "Unknown compression type\n");
+        return nullptr;
+    }
+}
+
 CPLErr EMURasterBand::IWriteBlock(int nBlockXOff, int nBlockYOff, void *pData)
 {
+    const std::lock_guard<std::mutex> lock(*m_mutex);
+
     EMUDataset *poEMUDS = cpl::down_cast<EMUDataset *>(poDS);
     
     // GDAL deals in blocks - if we are at the end of a row
@@ -537,16 +628,17 @@ CPLErr EMURasterBand::IWriteBlock(int nBlockXOff, int nBlockYOff, void *pData)
     int typeSize = GDALGetDataTypeSize(eDataType) / 8;
 
     // TODO: compression
-    uint64_t compression = COMPRESSION_NONE;
+    uint64_t compression = COMPRESSION_ZLIB;
     VSIFWriteL(&compression, sizeof(compression), 1, poEMUDS->m_fp);
 
-    size_t blockSize = (nXValid * nYValid) * typeSize;
+    size_t uncompressedSize = (nXValid * nYValid) * typeSize;
+    size_t compressedSize = uncompressedSize;
     
     if( (nXValid != nBlockXSize) || (nYValid != nBlockYSize) ) 
     {
         // a partial block. They actually give the full block so we must subset
-        char *pSubData = static_cast<char*>(CPLMalloc(blockSize));
-        char *pSrcData = static_cast<char*>(pData);
+        Bytef *pSubData = static_cast<Bytef*>(CPLMalloc(uncompressedSize));
+        Bytef *pSrcData = static_cast<Bytef*>(pData);
         int nSrcIdx = 0, nDstIdx = 0;
         for( int nRow = 0; nRow < nYValid; nRow++ )
         {
@@ -554,17 +646,30 @@ CPLErr EMURasterBand::IWriteBlock(int nBlockXOff, int nBlockYOff, void *pData)
             nSrcIdx += (nBlockXSize * typeSize);
             nDstIdx += (nXValid * typeSize);
         }
-        VSIFWriteL(pSubData, blockSize, 1, poEMUDS->m_fp);
-        CPLFree(pSubData);    
+        
+        bool bFree;
+        Bytef *pCompressed = doCompression(compression, pSubData, uncompressedSize, &compressedSize, &bFree);
+        VSIFWriteL(pCompressed, compressedSize, 1, poEMUDS->m_fp);
+        CPLFree(pSubData);
+        if( bFree ) 
+        {
+            CPLFree(pCompressed);
+        }
     }
     else
     {
         // full data
-        VSIFWriteL(pData, blockSize, 1, poEMUDS->m_fp);
+        bool bFree;
+        void *pCompressed = doCompression(compression, static_cast<Bytef*>(pData), uncompressedSize, &compressedSize, &bFree);
+        VSIFWriteL(pCompressed, compressedSize, 1, poEMUDS->m_fp);
+        if( bFree ) 
+        {
+            CPLFree(pCompressed);
+        }
     }
     
     // update map
-    poEMUDS->setTileOffset(0, nBand, nBlockXOff, nBlockYOff, tileOffset, blockSize);
+    poEMUDS->setTileOffset(0, nBand, nBlockXOff, nBlockYOff, tileOffset, compressedSize, uncompressedSize);
 
     // TODO: read data to work out stats and pyramid layers 
     
