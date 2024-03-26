@@ -17,7 +17,8 @@ find_package(ZLIB REQUIRED)
 
 option (BUILD_SHARED_LIBS "Build with shared library" ON)
 
-add_library(gdal_EMU src/emudataset.cpp)
+include_directories("include")
+add_library(gdal_EMU src/emudataset.cpp src/emuband.cpp include/emudataset.h include/emuband.h)
 # remove the leading "lib" as GDAL won't look for files with this prefix
 set_target_properties(gdal_EMU PROPERTIES PREFIX "")
 target_compile_features(gdal_EMU PUBLIC cxx_std_11)
