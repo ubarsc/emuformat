@@ -37,9 +37,6 @@
 #include <thread>
 #include <unordered_map>
 
-const int COMPRESSION_NONE = 0;
-const int COMPRESSION_ZLIB = 1;
-
 const int EMU_VERSION = 1;
 
 struct EMUTileKey

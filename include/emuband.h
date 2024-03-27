@@ -54,6 +54,12 @@ public:
      
     bool GetThematic() { return m_bThematic;};
 private:
+
+    void AccumulateData(void *pData, size_t nLength, size_t nXValid);
+    template<class T>
+    void AccumulateDataForType(void *pData, size_t nLength, size_t nXValid);
+
+
     bool m_bNoDataSet;
     int64_t m_nNoData;
     bool m_bThematic;

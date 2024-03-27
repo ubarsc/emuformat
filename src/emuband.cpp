@@ -29,8 +29,7 @@
  */
  
 #include "emuband.h"
-
-#include "zlib.h"
+#include "emucompress.h"
 
 EMURasterBand::EMURasterBand(EMUDataset *pDataset, int nBandIn, GDALDataType eType, 
         bool bThematic, const std::shared_ptr<std::mutex>& other)
@@ -55,35 +54,6 @@ EMURasterBand::~EMURasterBand()
     
 }
 
-void doUncompression(int type, Bytef *pInput, size_t inputSize, Bytef *pOutput, size_t pnOutputSize)
-{
-    if( type == COMPRESSION_NONE )
-    {
-        memcpy(pOutput, pInput, inputSize);
-    }
-    else if( type == COMPRESSION_ZLIB )
-    {
-        z_stream infstream;
-        infstream.zalloc = Z_NULL;
-        infstream.zfree = Z_NULL;
-        infstream.opaque = Z_NULL;
-        infstream.avail_in = inputSize;
-        infstream.next_in = pInput;
-        infstream.avail_out = pnOutputSize;
-        infstream.next_out = pOutput;
-         
-        // the actual DE-compression work.
-        inflateInit(&infstream);
-        inflate(&infstream, Z_NO_FLUSH);
-        inflateEnd(&infstream);
-    } 
-    else
-    {
-        fprintf(stderr, "Unknown compression type\n");
-    }
-
-}
-
 CPLErr EMURasterBand::IReadBlock(int nBlockXOff, int nBlockYOff, void *pData)
 {
     const std::lock_guard<std::mutex> lock(*m_mutex);
@@ -106,8 +76,7 @@ CPLErr EMURasterBand::IReadBlock(int nBlockXOff, int nBlockYOff, void *pData)
     // seek to where this block starts    
     VSIFSeekL(poEMUDS->m_fp, val.offset, SEEK_SET);
 
-    // TODO: compression
-    uint64_t compression;
+    uint8_t compression;
     VSIFReadL(&compression, sizeof(compression), 1, poEMUDS->m_fp);
     
     // we need to work out whether we are partial
@@ -152,45 +121,6 @@ CPLErr EMURasterBand::IReadBlock(int nBlockXOff, int nBlockYOff, void *pData)
     return CE_None;
 }
 
-// https://gist.github.com/arq5x/5315739
-Bytef* doCompression(int type, Bytef *pInput, size_t inputSize, size_t *pnOutputSize, bool *pbFree) 
-{
-    if( type == COMPRESSION_NONE )
-    {
-        // do nothing
-        *pnOutputSize = inputSize;
-        *pbFree = false;
-        return pInput;
-    }
-    else if( type == COMPRESSION_ZLIB )
-    {
-        Bytef *pOutput = static_cast<Bytef*>(CPLMalloc(inputSize));
-    
-        z_stream defstream;
-        defstream.zalloc = Z_NULL;
-        defstream.zfree = Z_NULL;
-        defstream.opaque = Z_NULL;
-        defstream.avail_in = inputSize;
-        defstream.next_in = pInput;
-        defstream.avail_out = inputSize;
-        defstream.next_out = pOutput;
-        
-        // the actual compression work.
-        deflateInit(&defstream, Z_BEST_COMPRESSION);
-        deflate(&defstream, Z_FINISH);
-        deflateEnd(&defstream);
-        
-        *pnOutputSize = defstream.total_out;
-        *pbFree = true;
-        return pOutput;
-    } 
-    else
-    {
-        fprintf(stderr, "Unknown compression type\n");
-        return nullptr;
-    }
-}
-
 CPLErr EMURasterBand::IWriteBlock(int nBlockXOff, int nBlockYOff, void *pData)
 {
     const std::lock_guard<std::mutex> lock(*m_mutex);
@@ -207,8 +137,8 @@ CPLErr EMURasterBand::IWriteBlock(int nBlockXOff, int nBlockYOff, void *pData)
     vsi_l_offset tileOffset = VSIFTellL(poEMUDS->m_fp);
     int typeSize = GDALGetDataTypeSize(eDataType) / 8;
 
-    // TODO: compression
-    uint64_t compression = COMPRESSION_ZLIB;
+    // TODO: set compression
+    uint8_t compression = COMPRESSION_ZLIB;
     VSIFWriteL(&compression, sizeof(compression), 1, poEMUDS->m_fp);
 
     size_t uncompressedSize = (nXValid * nYValid) * typeSize;
@@ -227,6 +157,8 @@ CPLErr EMURasterBand::IWriteBlock(int nBlockXOff, int nBlockYOff, void *pData)
             nDstIdx += (nXValid * typeSize);
         }
         
+        AccumulateData(pSubData, nXValid * nYValid, nXValid);
+        
         bool bFree;
         Bytef *pCompressed = doCompression(compression, pSubData, uncompressedSize, &compressedSize, &bFree);
         VSIFWriteL(pCompressed, compressedSize, 1, poEMUDS->m_fp);
@@ -239,6 +171,8 @@ CPLErr EMURasterBand::IWriteBlock(int nBlockXOff, int nBlockYOff, void *pData)
     else
     {
         // full data
+        AccumulateData(pData, nXValid * nYValid, nXValid);
+
         bool bFree;
         void *pCompressed = doCompression(compression, static_cast<Bytef*>(pData), uncompressedSize, &compressedSize, &bFree);
         VSIFWriteL(pCompressed, compressedSize, 1, poEMUDS->m_fp);
@@ -302,4 +236,45 @@ CPLErr EMURasterBand::DeleteNoDataValue()
 {
     m_bNoDataSet = false;   
     return CE_None;
+}
+
+void EMURasterBand::AccumulateData(void *pData, size_t nLength, size_t nXValid)
+{
+    switch(eDataType)
+    {
+        case GDT_Byte:
+            AccumulateDataForType<uint8_t>(pData, nLength, nXValid);
+            break;
+        case GDT_UInt16:
+            AccumulateDataForType<uint16_t>(pData, nLength, nXValid);
+            break;
+        case GDT_Int16:
+            AccumulateDataForType<int16_t>(pData, nLength, nXValid);
+            break;
+        default:
+            fprintf(stderr, "Unknown pixel type\n");
+            break;
+    }
+}
+
+// accumulate the raster data into the histogram
+template<class T>
+void EMURasterBand::AccumulateDataForType(void *pData, size_t nLength, size_t nXValid)
+{
+    T *pTypeData = static_cast<T*>(pData);
+    for( size_t n = 0; n < nLength; n++ )
+    {
+        T val = pTypeData[n];
+        auto search = histogram.find(val);
+        if( search != histogram.end() )
+        {
+            // update 
+            histogram[val] = histogram[val]++;
+        }
+        else
+        {
+            // set 
+            histogram[val] = 1;
+        }
+    }
 }
