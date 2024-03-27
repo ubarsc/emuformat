@@ -90,7 +90,7 @@ CPLErr EMUDataset::Close()
             
             // TODO: info on each overview here
             
-            // nodata for each band. 
+            // nodata and stats for each band. 
             for( int n = 0; n < GetRasterCount(); n++ )
             {
                 EMURasterBand *pBand = cpl::down_cast<EMURasterBand*>(GetRasterBand(n + 1));
@@ -102,6 +102,15 @@ CPLErr EMUDataset::Close()
                 VSIFWriteL(&nodata, sizeof(nodata), 1, m_fp);
                 uint8_t nThematic = pBand->GetThematic();
                 VSIFWriteL(&nThematic, sizeof(nThematic), 1, m_fp);
+                
+                pBand->EstimateStatsFromHistogram();
+                
+                VSIFWriteL(&pBand->m_dMin, sizeof(pBand->m_dMin), 1, m_fp);
+                VSIFWriteL(&pBand->m_dMax, sizeof(pBand->m_dMax), 1, m_fp);
+                VSIFWriteL(&pBand->m_dMean, sizeof(pBand->m_dMean), 1, m_fp);
+                VSIFWriteL(&pBand->m_dStdDev, sizeof(pBand->m_dStdDev), 1, m_fp);
+                VSIFWriteL(&pBand->m_dMedian, sizeof(pBand->m_dMedian), 1, m_fp);
+                VSIFWriteL(&pBand->m_dMode, sizeof(pBand->m_dMode), 1, m_fp);
             }
             
             // tilesize
@@ -228,7 +237,7 @@ GDALDataset *EMUDataset::Open(GDALOpenInfo *poOpenInfo)
     GDALDataType eType = (GDALDataType)ftype;
     EMUDataset *pDS = new EMUDataset(fp, eType, xsize, ysize, GA_ReadOnly);
 
-    // nodata for each band. 
+    // nodata and stats for each band. 
     for( int n = 0; n < count; n++ )
     {
         uint8_t n8NoDataSet;
@@ -241,6 +250,13 @@ GDALDataset *EMUDataset::Open(GDALOpenInfo *poOpenInfo)
         EMURasterBand *pBand = new EMURasterBand(pDS, n + 1, eType, nThematic, pDS->m_mutex);
         if(n8NoDataSet)
             pBand->SetNoDataValueAsInt64(nodata);
+            
+        VSIFReadL(&pBand->m_dMin, sizeof(pBand->m_dMin), 1, fp);
+        VSIFReadL(&pBand->m_dMax, sizeof(pBand->m_dMax), 1, fp);
+        VSIFReadL(&pBand->m_dMean, sizeof(pBand->m_dMean), 1, fp);
+        VSIFReadL(&pBand->m_dStdDev, sizeof(pBand->m_dStdDev), 1, fp);
+        VSIFReadL(&pBand->m_dMedian, sizeof(pBand->m_dMedian), 1, fp);
+        VSIFReadL(&pBand->m_dMode, sizeof(pBand->m_dMode), 1, fp);
         
         pDS->SetBand(n + 1, pBand);
     }

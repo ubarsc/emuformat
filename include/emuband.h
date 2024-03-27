@@ -31,6 +31,7 @@
 #ifndef EMUBAND_H
 #define EMUBAND_H
 
+#include <map>
 #include "gdal_pam.h"
 
 #include "emudataset.h"
@@ -51,6 +52,10 @@ public:
     virtual CPLErr SetNoDataValueAsInt64(int64_t nNoData) override;
     virtual CPLErr SetNoDataValueAsUInt64(uint64_t nNoData) override;
     virtual CPLErr DeleteNoDataValue() override;
+    
+    virtual CPLErr GetStatistics(int bApproxOK, int bForce, double *pdfMin,
+                                 double *pdfMax, double *pdfMean,
+                                 double *padfStdDev) override;
      
     bool GetThematic() { return m_bThematic;};
 private:
@@ -58,13 +63,21 @@ private:
     void AccumulateData(void *pData, size_t nLength, size_t nXValid);
     template<class T>
     void AccumulateDataForType(void *pData, size_t nLength, size_t nXValid);
+    void EstimateStatsFromHistogram();
 
 
     bool m_bNoDataSet;
     int64_t m_nNoData;
     bool m_bThematic;
-    std::unordered_map<uint32_t, uint32_t> histogram;
+    std::map<uint32_t, uint32_t> m_histogram;
     std::shared_ptr<std::mutex> m_mutex;
+    
+    double m_dMin;
+    double m_dMax;
+    double m_dMean;
+    double m_dStdDev;
+    double m_dMedian;
+    double m_dMode;
 
     friend class EMUDataset;
 };

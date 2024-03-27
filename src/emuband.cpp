@@ -27,7 +27,10 @@
  *  WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  *
  */
- 
+
+#include <limits> 
+#include <cmath>
+
 #include "emuband.h"
 #include "emucompress.h"
 
@@ -45,6 +48,13 @@ EMURasterBand::EMURasterBand(EMUDataset *pDataset, int nBandIn, GDALDataType eTy
 
     nRasterXSize = pDataset->GetRasterXSize();          // ask the dataset for the total image size
     nRasterYSize = pDataset->GetRasterYSize();
+    
+    m_dMin = std::numeric_limits<double>::quiet_NaN();
+    m_dMax = std::numeric_limits<double>::quiet_NaN();
+    m_dMean = std::numeric_limits<double>::quiet_NaN();
+    m_dStdDev = std::numeric_limits<double>::quiet_NaN();
+    m_dMedian = std::numeric_limits<double>::quiet_NaN();
+    m_dMode = std::numeric_limits<double>::quiet_NaN();
     
     m_mutex = other;
 }
@@ -265,16 +275,97 @@ void EMURasterBand::AccumulateDataForType(void *pData, size_t nLength, size_t nX
     for( size_t n = 0; n < nLength; n++ )
     {
         T val = pTypeData[n];
-        auto search = histogram.find(val);
-        if( search != histogram.end() )
+        if( m_bNoDataSet && (val == m_nNoData))
+        {
+            continue;
+        }
+        auto search = m_histogram.find(val);
+        if( search != m_histogram.end() )
         {
             // update 
-            histogram[val] = histogram[val]++;
+            m_histogram[val] = m_histogram[val]++;
         }
         else
         {
             // set 
-            histogram[val] = 1;
+            m_histogram[val] = 1;
         }
     }
 }
+
+void EMURasterBand::EstimateStatsFromHistogram()
+{
+    // histogram stored as a std::map so keys should be sorted
+    // (important for median, below)    
+    double dSum = 0;
+    uint64_t pixCount = 0;
+    uint32_t nCountAtMode = 0;
+    for( auto i = m_histogram.begin(); i != m_histogram.end(); i++)
+    {
+        if( std::isnan(m_dMin ) || (i->first < m_dMin) )
+        {
+            m_dMin = i->first;
+        }
+        if( std::isnan(m_dMax ) || (i->first > m_dMax) )
+        {
+            m_dMax = i->first;
+        }
+        if( std::isnan(m_dMode) || (i->second > nCountAtMode))
+        {
+            m_dMode = i->first;
+            nCountAtMode = i->second;
+        }
+        dSum += (i->first * i->second);
+        pixCount += i->second;
+    }
+    
+    m_dMean = dSum / pixCount;
+    double dSumSq = 0;
+    for( auto i = m_histogram.begin(); i != m_histogram.end(); i++)
+    {
+        dSumSq += (i->second * pow(i->first - m_dMean, 2));
+    }
+    double dVariance = dSumSq / pixCount;
+    m_dStdDev = sqrt(dVariance);
+    
+    uint64_t nCountAtMedian = pixCount / 2;
+    pixCount = 0;
+    uint32_t lastVal = 0;
+    for( auto i = m_histogram.begin(); i != m_histogram.end(); i++)
+    {
+        if( pixCount > nCountAtMedian)
+        {
+            m_dMean = lastVal;
+            break;
+        }
+        pixCount += i->second;
+        lastVal = i->first;
+    }    
+}
+
+
+CPLErr EMURasterBand::GetStatistics(int bApproxOK, int bForce, double *pdfMin,
+                                 double *pdfMax, double *pdfMean,
+                                 double *padfStdDev)
+{
+    if(bForce)
+    {
+        CPLError(CE_Failure, CPLE_NotSupported,
+             "The EMU driver does not support recalculating stats.");
+        return CE_Failure;
+    }
+    
+    if(poDS->GetAccess() == GA_Update)
+    {
+        CPLError(CE_Failure, CPLE_NotSupported,
+             "The EMU driver only supports retrieving stats when the file is open in read only mode.");
+        return CE_Failure;
+    }
+    
+    *pdfMin = m_dMin;
+    *pdfMax = m_dMax;
+    *pdfMean = m_dMean;
+    *padfStdDev = m_dStdDev;
+    return CE_None;
+}
+
