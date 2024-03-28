@@ -53,10 +53,23 @@ public:
     virtual CPLErr SetNoDataValueAsUInt64(uint64_t nNoData) override;
     virtual CPLErr DeleteNoDataValue() override;
     
+    virtual double GetMinimum(int *pbSuccess) override;
+    virtual double GetMaximum(int *pbSuccess) override;
+    virtual CPLErr ComputeRasterMinMax(int bApproxOK, double *adfMinMax) override;
     virtual CPLErr GetStatistics(int bApproxOK, int bForce, double *pdfMin,
                                  double *pdfMax, double *pdfMean,
                                  double *padfStdDev) override;
-     
+    virtual CPLErr ComputeStatistics(int bApproxOK, double *pdfMin, double *pdfMax,
+        double *pdfMean, double *pdfStdDev,	GDALProgressFunc pfnProgress,
+        void *pProgressData) override;
+	virtual CPLErr SetStatistics(double dfMin, double dfMax, double dfMean,	
+	    double dfStdDev) override;
+	    
+	virtual CPLErr SetMetadataItem(const char *pszName, const char *pszValue, 
+	   const char *pszDomain) override;
+    virtual const char *GetMetadataItem (const char *pszName, 
+        const char *pszDomain) override;
+	     		
     bool GetThematic() { return m_bThematic;};
 private:
 
@@ -64,6 +77,7 @@ private:
     template<class T>
     void AccumulateDataForType(void *pData, size_t nLength, size_t nXValid);
     void EstimateStatsFromHistogram();
+    void SetMetadataFromStats();
 
 
     bool m_bNoDataSet;
@@ -71,6 +85,7 @@ private:
     bool m_bThematic;
     std::map<uint32_t, uint32_t> m_histogram;
     std::shared_ptr<std::mutex> m_mutex;
+    char               **m_papszMetadataList; // CPLStringList of metadata
     
     double m_dMin;
     double m_dMax;

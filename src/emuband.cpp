@@ -55,6 +55,7 @@ EMURasterBand::EMURasterBand(EMUDataset *pDataset, int nBandIn, GDALDataType eTy
     m_dStdDev = std::numeric_limits<double>::quiet_NaN();
     m_dMedian = std::numeric_limits<double>::quiet_NaN();
     m_dMode = std::numeric_limits<double>::quiet_NaN();
+    m_papszMetadataList = nullptr;
     
     m_mutex = other;
 }
@@ -66,6 +67,13 @@ EMURasterBand::~EMURasterBand()
 
 CPLErr EMURasterBand::IReadBlock(int nBlockXOff, int nBlockYOff, void *pData)
 {
+    if(poDS->GetAccess() != GA_Update)
+    {
+        CPLError(CE_Failure, CPLE_NotSupported,
+             "The EMU driver only supports reading when open in readonly mode");
+        return CE_Failure;
+    }
+
     const std::lock_guard<std::mutex> lock(*m_mutex);
 
     EMUDataset *poEMUDS = cpl::down_cast<EMUDataset *>(poDS);
@@ -343,17 +351,50 @@ void EMURasterBand::EstimateStatsFromHistogram()
     }    
 }
 
+double EMURasterBand::GetMinimum(int *pbSuccess)
+{
+    if(poDS->GetAccess() == GA_Update)
+    {
+        CPLError(CE_Failure, CPLE_NotSupported,
+             "The EMU driver only supports retrieving stats when the file is open in read only mode.");
+        *pbSuccess = 0;
+        return 0.0;
+    }
+    *pbSuccess = 1;
+    return m_dMin;
+}
+
+double EMURasterBand::GetMaximum(int *pbSuccess)
+{
+    if(poDS->GetAccess() == GA_Update)
+    {
+        CPLError(CE_Failure, CPLE_NotSupported,
+             "The EMU driver only supports retrieving stats when the file is open in read only mode.");
+        *pbSuccess = 0;
+        return 0.0;
+    }
+    *pbSuccess = 1;
+    return m_dMax;
+}
+
+CPLErr EMURasterBand::ComputeRasterMinMax(int bApproxOK, double *adfMinMax)
+{
+    if(poDS->GetAccess() == GA_Update)
+    {
+        CPLError(CE_Failure, CPLE_NotSupported,
+             "The EMU driver only supports retrieving stats when the file is open in read only mode.");
+        return CE_Failure;
+    }
+    adfMinMax[0] = m_dMin;
+    adfMinMax[1] = m_dMax;
+    return CE_None;
+}
 
 CPLErr EMURasterBand::GetStatistics(int bApproxOK, int bForce, double *pdfMin,
                                  double *pdfMax, double *pdfMean,
                                  double *padfStdDev)
 {
-    if(bForce)
-    {
-        CPLError(CE_Failure, CPLE_NotSupported,
-             "The EMU driver does not support recalculating stats.");
-        return CE_Failure;
-    }
+    // ignore bApproxOK and bForce
     
     if(poDS->GetAccess() == GA_Update)
     {
@@ -369,3 +410,67 @@ CPLErr EMURasterBand::GetStatistics(int bApproxOK, int bForce, double *pdfMin,
     return CE_None;
 }
 
+CPLErr EMURasterBand::ComputeStatistics(int bApproxOK, double *pdfMin, double *pdfMax,
+		double *pdfMean, double *pdfStdDev,	GDALProgressFunc pfnProgress,
+		void *pProgressData) 		
+{
+    // ignore bApproxOK and bForce
+    
+    if(poDS->GetAccess() == GA_Update)
+    {
+        CPLError(CE_Failure, CPLE_NotSupported,
+             "The EMU driver only supports retrieving stats when the file is open in read only mode.");
+        return CE_Failure;
+    }
+    
+    *pdfMin = m_dMin;
+    *pdfMax = m_dMax;
+    *pdfMean = m_dMean;
+    *pdfStdDev = m_dStdDev;
+    return CE_None;
+}
+
+CPLErr EMURasterBand::SetStatistics(double dfMin, double dfMax, double dfMean,	
+	    double dfStdDev)
+{
+    CPLError(CE_Failure, CPLE_NotSupported,
+         "The EMU driver only supports calculating stats itself.");
+    return CE_Failure;
+}
+
+
+CPLErr EMURasterBand::SetMetadataItem(const char *pszName, const char *pszValue, 
+	   const char *pszDomain)
+{
+    if(poDS->GetAccess() != GA_Update)
+    {
+        CPLError(CE_Failure, CPLE_NotSupported,
+             "The EMU driver only supports setting metadata on creation");
+        return CE_Failure;
+    }
+
+    if( EQUAL( pszName, "LAYER_TYPE" ) )
+    {
+        if( EQUAL( pszValue, "athematic" ) )
+        {
+            m_bThematic = false;
+        }
+        else
+        {
+            m_bThematic = false;
+        }
+        return CE_None;
+    }
+    else
+    {
+        CPLError(CE_Failure, CPLE_NotSupported,
+             "The EMU driver only supports calculating stats itself.");
+        return CE_Failure;
+    }    
+}
+
+const char *EMURasterBand::GetMetadataItem (const char *pszName, const char *pszDomain)
+{
+    // TODO
+    return nullptr;
+}
