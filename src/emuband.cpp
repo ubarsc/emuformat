@@ -67,7 +67,7 @@ EMURasterBand::~EMURasterBand()
 
 CPLErr EMURasterBand::IReadBlock(int nBlockXOff, int nBlockYOff, void *pData)
 {
-    if(poDS->GetAccess() != GA_Update)
+    if(poDS->GetAccess() == GA_Update)
     {
         CPLError(CE_Failure, CPLE_NotSupported,
              "The EMU driver only supports reading when open in readonly mode");
