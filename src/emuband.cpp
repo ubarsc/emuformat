@@ -443,7 +443,7 @@ void EMURasterBand::UpdateMetadataList()
 {
     if( m_bThematic )
     {
-        m_papszMetadataList = CSLSetNameValue(m_papszMetadataList, "LAYER_TYPE", "athematic" );        
+        m_papszMetadataList = CSLSetNameValue(m_papszMetadataList, "LAYER_TYPE", "thematic" );        
     }
     else
     {
@@ -540,7 +540,7 @@ CPLErr EMURasterBand::SetMetadata(char **papszMetadata, const char *pszDomain)
     {
         pszValue = CPLParseNameValue( papszMetadata[nIndex], &pszName );
 
-        // it is LAYER_TYPE? if so handle seperately
+        // it is LAYER_TYPE?
         if( EQUAL( pszName, "LAYER_TYPE" ) )
         {
             if( EQUAL( pszValue, "athematic" ) )
@@ -552,11 +552,9 @@ CPLErr EMURasterBand::SetMetadata(char **papszMetadata, const char *pszDomain)
                 m_bThematic = true;
             }
         }
+        // ignore any others.
         nIndex++;
     }
-    // destroy our list and duplicate the one passed in
-    // and use that as our list from now on
-    CSLDestroy(m_papszMetadataList);
-    m_papszMetadataList = CSLDuplicate(papszMetadata);
+    UpdateMetadataList();
     return CE_None;
 }
