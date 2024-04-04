@@ -468,6 +468,11 @@ void EMURasterBand::UpdateMetadataList()
 
     osWorkingResult.Printf( "%f", m_dMode);
     m_papszMetadataList = CSLSetNameValue(m_papszMetadataList, "STATISTICS_MODE", osWorkingResult);
+    
+    m_papszMetadataList = CSLSetNameValue(m_papszMetadataList, "STATISTICS_SKIPFACTORX", "1");
+    m_papszMetadataList = CSLSetNameValue(m_papszMetadataList, "STATISTICS_SKIPFACTORY", "1");
+
+    // TODO: STATISTICS_HISTO*
 }
 
 CPLErr EMURasterBand::SetMetadataItem(const char *pszName, const char *pszValue, 
