@@ -257,6 +257,7 @@ GDALDataset *EMUDataset::Open(GDALOpenInfo *poOpenInfo)
         VSIFReadL(&pBand->m_dStdDev, sizeof(pBand->m_dStdDev), 1, fp);
         VSIFReadL(&pBand->m_dMedian, sizeof(pBand->m_dMedian), 1, fp);
         VSIFReadL(&pBand->m_dMode, sizeof(pBand->m_dMode), 1, fp);
+        pBand->UpdateMetadataList();
         
         pDS->SetBand(n + 1, pBand);
     }

@@ -56,6 +56,7 @@ EMURasterBand::EMURasterBand(EMUDataset *pDataset, int nBandIn, GDALDataType eTy
     m_dMedian = std::numeric_limits<double>::quiet_NaN();
     m_dMode = std::numeric_limits<double>::quiet_NaN();
     m_papszMetadataList = nullptr;
+    UpdateMetadataList();
     
     m_mutex = other;
 }
@@ -343,7 +344,7 @@ void EMURasterBand::EstimateStatsFromHistogram()
     {
         if( pixCount > nCountAtMedian)
         {
-            m_dMean = lastVal;
+            m_dMedian = lastVal;
             break;
         }
         pixCount += i->second;
@@ -438,6 +439,36 @@ CPLErr EMURasterBand::SetStatistics(double dfMin, double dfMax, double dfMean,
     return CE_Failure;
 }
 
+void EMURasterBand::UpdateMetadataList()
+{
+    if( m_bThematic )
+    {
+        m_papszMetadataList = CSLSetNameValue(m_papszMetadataList, "LAYER_TYPE", "athematic" );        
+    }
+    else
+    {
+        m_papszMetadataList = CSLSetNameValue(m_papszMetadataList, "LAYER_TYPE", "athematic" );        
+    }
+    
+    CPLString osWorkingResult;
+    osWorkingResult.Printf( "%f", m_dMin);
+    m_papszMetadataList = CSLSetNameValue(m_papszMetadataList, "STATISTICS_MINIMUM", osWorkingResult);
+
+    osWorkingResult.Printf( "%f", m_dMax);
+    m_papszMetadataList = CSLSetNameValue(m_papszMetadataList, "STATISTICS_MAXIMUM", osWorkingResult);
+
+    osWorkingResult.Printf( "%f", m_dMean);
+    m_papszMetadataList = CSLSetNameValue(m_papszMetadataList, "STATISTICS_MEAN", osWorkingResult);
+
+    osWorkingResult.Printf( "%f", m_dMedian);
+    m_papszMetadataList = CSLSetNameValue(m_papszMetadataList, "STATISTICS_MEDIAN", osWorkingResult);
+
+    osWorkingResult.Printf( "%f", m_dStdDev);
+    m_papszMetadataList = CSLSetNameValue(m_papszMetadataList, "STATISTICS_STDDEV", osWorkingResult);
+
+    osWorkingResult.Printf( "%f", m_dMode);
+    m_papszMetadataList = CSLSetNameValue(m_papszMetadataList, "STATISTICS_MODE", osWorkingResult);
+}
 
 CPLErr EMURasterBand::SetMetadataItem(const char *pszName, const char *pszValue, 
 	   const char *pszDomain)
@@ -459,6 +490,7 @@ CPLErr EMURasterBand::SetMetadataItem(const char *pszName, const char *pszValue,
         {
             m_bThematic = false;
         }
+        UpdateMetadataList();
         return CE_None;
     }
     else
@@ -469,8 +501,57 @@ CPLErr EMURasterBand::SetMetadataItem(const char *pszName, const char *pszValue,
     }    
 }
 
-const char *EMURasterBand::GetMetadataItem (const char *pszName, const char *pszDomain)
+const char *EMURasterBand::GetMetadataItem(const char *pszName, const char *pszDomain)
 {
-    // TODO
-    return nullptr;
+    // only deal with 'default' domain - no geolocation etc
+    if( ( pszDomain != nullptr ) && ( *pszDomain != '\0' ) )
+        return nullptr;
+    // get it out of the CSLStringList so we can be sure it is persistant
+    return CSLFetchNameValue(m_papszMetadataList, pszName);
+}
+
+// get all the metadata as a CSLStringList - not thread safe
+char **EMURasterBand::GetMetadata(const char *pszDomain)
+{
+    // only deal with 'default' domain - no geolocation etc
+    if( ( pszDomain != nullptr ) && ( *pszDomain != '\0' ) )
+        return nullptr;
+
+    // conveniently we already have it in this format
+    return m_papszMetadataList; 
+}
+
+// set the metadata as a CSLStringList
+CPLErr EMURasterBand::SetMetadata(char **papszMetadata, const char *pszDomain)
+{
+    // only deal with 'default' domain - no geolocation etc
+    if( ( pszDomain != nullptr ) && ( *pszDomain != '\0' ) )
+        return CE_Failure;
+    int nIndex = 0;
+    char *pszName;
+    const char *pszValue;
+    // iterate through each one
+    while( papszMetadata[nIndex] != nullptr )
+    {
+        pszValue = CPLParseNameValue( papszMetadata[nIndex], &pszName );
+
+        // it is LAYER_TYPE? if so handle seperately
+        if( EQUAL( pszName, "LAYER_TYPE" ) )
+        {
+            if( EQUAL( pszValue, "athematic" ) )
+            {
+                m_bThematic = false;
+            }
+            else
+            {
+                m_bThematic = true;
+            }
+        }
+        nIndex++;
+    }
+    // destroy our list and duplicate the one passed in
+    // and use that as our list from now on
+    CSLDestroy(m_papszMetadataList);
+    m_papszMetadataList = CSLDuplicate(papszMetadata);
+    return CE_None;
 }

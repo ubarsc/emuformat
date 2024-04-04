@@ -69,6 +69,8 @@ public:
 	   const char *pszDomain) override;
     virtual const char *GetMetadataItem (const char *pszName, 
         const char *pszDomain) override;
+    virtual char** GetMetadata(const char *pszDomain) override;
+    virtual CPLErr SetMetadata(char **papszMetadata, const char *pszDomain) override;
 	     		
     bool GetThematic() { return m_bThematic;};
 private:
@@ -78,6 +80,7 @@ private:
     void AccumulateDataForType(void *pData, size_t nLength, size_t nXValid);
     void EstimateStatsFromHistogram();
     void SetMetadataFromStats();
+    void UpdateMetadataList();
 
 
     bool m_bNoDataSet;
