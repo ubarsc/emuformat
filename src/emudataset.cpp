@@ -60,11 +60,18 @@ CPLErr EMUDataset::Close()
     const std::lock_guard<std::mutex> lock(*m_mutex);
 
     CPLErr eErr = CE_None;
-    if( (nOpenFlags != OPEN_FLAGS_CLOSED ) && (eAccess == GA_Update) )
+    if( 
+#ifdef HAVE_RFC91
+        (nOpenFlags != OPEN_FLAGS_CLOSED ) && 
+#endif
+        (eAccess == GA_Update) )
     {
+#ifdef HAVE_RFC91
         if( FlushCache(true) != CE_None )
             eErr = CE_Failure;
-
+#else
+        FlushCache();
+#endif
         if( m_fp )  
         {
             // now write header

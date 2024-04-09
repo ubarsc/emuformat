@@ -32,7 +32,7 @@
 #define EMUBAND_H
 
 #include <map>
-#include "gdal_pam.h"
+#include "gdal_priv.h"
 
 #include "emudataset.h"
 

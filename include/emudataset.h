@@ -31,11 +31,16 @@
 #ifndef EMUDATASET_H
 #define EMUDATASET_H
 
-#include "gdal_pam.h"
+#include "gdal_priv.h"
 
 #include <mutex>
 #include <thread>
 #include <unordered_map>
+
+
+#if (GDAL_VERSION_MAJOR > 3) || ((GDAL_VERSION_MAJOR == 3) && (GDAL_VERSION_MINOR >= 7))
+    #define HAVE_RFC91
+#endif
 
 const int EMU_VERSION = 1;
 
@@ -69,7 +74,7 @@ struct std::hash<EMUTileKey>
 
 struct EMUTileValue
 {
-    vsi_l_offset offset;
+    uint64_t offset;
     uint64_t size;
     uint64_t uncompressedSize;
 };
@@ -91,7 +96,11 @@ public:
     CPLErr SetGeoTransform( double * padfTransform ) override;
     const OGRSpatialReference* GetSpatialRef() const override;
     CPLErr SetSpatialRef(const OGRSpatialReference*) override;
+#ifdef HAVE_RFC91
     CPLErr Close() override;
+#else
+    CPLErr Close();
+#endif
     
 private:
     void setTileOffset(uint64_t o, uint64_t band, uint64_t x, 
@@ -108,5 +117,6 @@ private:
     GDALDataType m_eType;
     
     friend class EMURasterBand;
+    friend class EMURat;
 };
 #endif //EMUDATASET_H

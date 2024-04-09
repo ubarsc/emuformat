@@ -35,10 +35,15 @@
 #include <vector>
 #include <mutex>
 
+#include "gdal_rat.h"
+
+#include "emudataset.h"
+
 struct EMURatChunk
 {
     uint64_t startIdx;
     uint64_t length;
+    uint64_t offset;
 };
 
 struct EMURatColumn
@@ -63,12 +68,22 @@ public:
 
     virtual int           GetRowCount() const override;
     
+    virtual CPLErr        ValuesIO(GDALRWFlag eRWFlag, int iField, int iStartRow, int iLength, double *pdfData) override;
+    virtual CPLErr        ValuesIO(GDALRWFlag eRWFlag, int iField, int iStartRow, int iLength, int *pnData) override;
+    virtual CPLErr        ValuesIO(GDALRWFlag eRWFlag, int iField, int iStartRow, int iLength, char **papszStrList) override;
+    
+    virtual int           ChangesAreWrittenToFile() override;
+    virtual void          SetRowCount( int iCount ) override;
+
+    virtual CPLErr        CreateColumn( const char *pszFieldName, 
+                                GDALRATFieldType eFieldType, 
+                                GDALRATFieldUsage eFieldUsage ) override;
 private:
 
     EMUDataset *m_pEMUDS;
     std::shared_ptr<std::mutex> m_mutex;
     std::vector<EMURatColumn> m_cols;
-
+    uint64_t m_nRowCount;
 };
 
 #endif //EMURAT_H
