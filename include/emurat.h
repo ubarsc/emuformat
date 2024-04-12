@@ -44,6 +44,7 @@ struct EMURatChunk
     uint64_t startIdx;
     uint64_t length;
     uint64_t offset;
+    uint64_t compressedSize;
 };
 
 struct EMURatColumn
@@ -79,6 +80,8 @@ public:
                                 GDALRATFieldType eFieldType, 
                                 GDALRATFieldUsage eFieldUsage ) override;
 private:
+
+    void WriteIndex();
 
     EMUDataset *m_pEMUDS;
     std::shared_ptr<std::mutex> m_mutex;

@@ -161,7 +161,7 @@ CPLErr EMURasterBand::IWriteBlock(int nBlockXOff, int nBlockYOff, void *pData)
     VSIFWriteL(&compression, sizeof(compression), 1, poEMUDS->m_fp);
 
     size_t uncompressedSize = (nXValid * nYValid) * typeSize;
-    size_t compressedSize = uncompressedSize;
+    size_t compressedSize = uncompressedSize + 100;
     
     if( (nXValid != nBlockXSize) || (nYValid != nBlockYSize) ) 
     {

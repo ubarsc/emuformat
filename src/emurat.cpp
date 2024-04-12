@@ -29,6 +29,11 @@
  */
  
 #include "emurat.h"
+#include "emucompress.h"
+
+#include <algorithm> 
+
+const int MAX_RAT_CHUNK = 256 * 256;
 
 EMURat::EMURat(EMUDataset *pDS, const std::shared_ptr<std::mutex>& other)
 {
@@ -169,17 +174,58 @@ CPLErr EMURat::ValuesIO(GDALRWFlag eRWFlag, int iField, int iStartRow, int iLeng
     {
         iLength = m_nRowCount - iStartRow;
     }
+
+    // TODO: set compression
+    uint8_t compression = COMPRESSION_ZLIB;
+    int iThisBlockLength;
     
     const std::lock_guard<std::mutex> lock(*m_mutex);
     if( eRWFlag == GF_Write) 
     {
-        vsi_l_offset chunkOffset = VSIFTellL(m_pEMUDS->m_fp);
-        VSIFWriteL(pdfData, sizeof(double), iLength, m_pEMUDS->m_fp);
-        EMURatChunk chunk;
-        chunk.startIdx = iStartRow;
-        chunk.length = iLength;
-        chunk.offset = chunkOffset;
-        m_cols[iField].chunks.push_back(chunk);
+        if(m_pEMUDS->GetAccess() != GA_Update)
+        {
+            CPLError(CE_Failure, CPLE_NotSupported,
+            "The EMU driver only supports writing when creating");
+            return CE_Failure;
+        }
+
+        while(iLength > 0)
+        {
+            if( iLength > MAX_RAT_CHUNK)
+            {
+                iThisBlockLength = MAX_RAT_CHUNK;
+            }
+            else
+            {
+                iThisBlockLength = iLength;
+            }
+            vsi_l_offset chunkOffset = VSIFTellL(m_pEMUDS->m_fp);
+            
+            VSIFWriteL(&compression, sizeof(compression), 1, m_pEMUDS->m_fp);
+            size_t uncompressedSize = iThisBlockLength * sizeof(double);
+            size_t compressedSize = uncompressedSize + 100;
+
+            bool bFree;
+            Bytef *pCompressed = doCompression(compression, reinterpret_cast<Bytef*>(pdfData), uncompressedSize, &compressedSize, &bFree);
+                    
+            VSIFWriteL(pCompressed, compressedSize, 1, m_pEMUDS->m_fp);
+            
+            if( bFree ) 
+            {
+                CPLFree(pCompressed);
+            }
+            
+            EMURatChunk chunk;
+            chunk.startIdx = iStartRow;
+            chunk.length = iThisBlockLength;
+            chunk.offset = chunkOffset;
+            chunk.compressedSize = compressedSize;
+            m_cols[iField].chunks.push_back(chunk);
+            
+            pdfData += iThisBlockLength;
+            iLength -= iThisBlockLength;
+            iStartRow += iThisBlockLength;
+        }
     }
     else
     {
@@ -218,7 +264,11 @@ CPLErr EMURat::ValuesIO(GDALRWFlag eRWFlag, int iField, int iStartRow, int iLeng
     }    
     
     // we store as int64 internally
-    int64_t *pn64Tmp = new int64_t[iLength];
+    int64_t *pn64Tmp = new int64_t[MAX_RAT_CHUNK];
+
+    // TODO: set compression
+    uint8_t compression = COMPRESSION_ZLIB;
+    int iThisBlockLength;
     
     const std::lock_guard<std::mutex> lock(*m_mutex);
     if( eRWFlag == GF_Write) 
@@ -230,19 +280,49 @@ CPLErr EMURat::ValuesIO(GDALRWFlag eRWFlag, int iField, int iStartRow, int iLeng
             return CE_Failure;
         }
         
-        vsi_l_offset chunkOffset = VSIFTellL(m_pEMUDS->m_fp);
-        // convert
-        for( int i = 0; i < iLength; i++ ) 
+        while(iLength > 0)
         {
-            pn64Tmp[i] = pnData[i];
+            if( iLength > MAX_RAT_CHUNK)
+            {
+                iThisBlockLength = MAX_RAT_CHUNK;
+            }
+            else
+            {
+                iThisBlockLength = iLength;
+            }
+
+            vsi_l_offset chunkOffset = VSIFTellL(m_pEMUDS->m_fp);
+            // convert
+            for( int i = 0; i < iThisBlockLength; i++ ) 
+            {
+                pn64Tmp[i] = pnData[i];
+            }
+
+            VSIFWriteL(&compression, sizeof(compression), 1, m_pEMUDS->m_fp);
+            size_t uncompressedSize = iThisBlockLength * sizeof(int64_t);
+            size_t compressedSize = uncompressedSize + 100;
+
+            bool bFree;
+            Bytef *pCompressed = doCompression(compression, reinterpret_cast<Bytef*>(pn64Tmp), uncompressedSize, &compressedSize, &bFree);
+                    
+            VSIFWriteL(pCompressed, compressedSize, 1, m_pEMUDS->m_fp);
+            
+            if( bFree ) 
+            {
+                CPLFree(pCompressed);
+            }
+
+            EMURatChunk chunk;
+            chunk.startIdx = iStartRow;
+            chunk.length = iThisBlockLength;
+            chunk.offset = chunkOffset;
+            chunk.compressedSize = compressedSize;
+            m_cols[iField].chunks.push_back(chunk);
+
+            pnData += iThisBlockLength;
+            iLength -= iThisBlockLength;
+            iStartRow += iThisBlockLength;
         }
-        
-        VSIFWriteL(pn64Tmp, sizeof(int64_t), iLength, m_pEMUDS->m_fp);
-        EMURatChunk chunk;
-        chunk.startIdx = iStartRow;
-        chunk.length = iLength;
-        chunk.offset = chunkOffset;
-        m_cols[iField].chunks.push_back(chunk);
     }
     else
     {
@@ -281,6 +361,10 @@ CPLErr EMURat::ValuesIO(GDALRWFlag eRWFlag, int iField, int iStartRow, int iLeng
     {
         iLength = m_nRowCount - iStartRow;
     }
+
+    // TODO: set compression
+    uint8_t compression = COMPRESSION_ZLIB;
+    int iThisBlockLength;
     
     const std::lock_guard<std::mutex> lock(*m_mutex);
     if( eRWFlag == GF_Write) 
@@ -291,18 +375,62 @@ CPLErr EMURat::ValuesIO(GDALRWFlag eRWFlag, int iField, int iStartRow, int iLeng
             "The EMU driver only supports writing when creating");
             return CE_Failure;
         }
-        
-        vsi_l_offset chunkOffset = VSIFTellL(m_pEMUDS->m_fp);
-        for( int i = 0; i < iLength; i++ )
+
+        while(iLength > 0)
         {
-            VSIFWriteL(papszStrList[i], sizeof(char), strlen(papszStrList[i]) + 1, m_pEMUDS->m_fp);
-        }
+            if( iLength > MAX_RAT_CHUNK)
+            {
+                iThisBlockLength = MAX_RAT_CHUNK;
+            }
+            else
+            {
+                iThisBlockLength = iLength;
+            }
         
-        EMURatChunk chunk;
-        chunk.startIdx = iStartRow;
-        chunk.length = iLength;
-        chunk.offset = chunkOffset;
-        m_cols[iField].chunks.push_back(chunk);
+            vsi_l_offset chunkOffset = VSIFTellL(m_pEMUDS->m_fp);
+            
+            // work out the total size of all the strings (including null byte)
+            // so we can compress them all in one go
+            size_t totalStringSize = 0;
+            for( int i = 0; i < iThisBlockLength; i++ )
+            {
+                totalStringSize += strlen(papszStrList[i]) + 1;
+            }
+            
+            char *pszStringData = new char[totalStringSize];
+            char *pszCurrentDest = pszStringData;
+            for( int i = 0; i < iThisBlockLength; i++ )
+            {
+                pszCurrentDest = stpcpy(pszCurrentDest, papszStrList[i]) + 1;
+            }
+            
+            VSIFWriteL(&compression, sizeof(compression), 1, m_pEMUDS->m_fp);
+            size_t uncompressedSize = totalStringSize;
+            size_t compressedSize = uncompressedSize + 100;
+
+            bool bFree;
+            Bytef *pCompressed = doCompression(compression, reinterpret_cast<Bytef*>(pszStringData), uncompressedSize, &compressedSize, &bFree);
+                    
+            VSIFWriteL(pCompressed, compressedSize, 1, m_pEMUDS->m_fp);
+            
+            if( bFree ) 
+            {
+                CPLFree(pCompressed);
+            }
+            
+            delete[] pszStringData;
+            
+            EMURatChunk chunk;
+            chunk.startIdx = iStartRow;
+            chunk.length = iThisBlockLength;
+            chunk.offset = chunkOffset;
+            chunk.compressedSize = compressedSize;
+            m_cols[iField].chunks.push_back(chunk);
+
+            papszStrList += iThisBlockLength;
+            iLength -= iThisBlockLength;
+            iStartRow += iThisBlockLength;
+        }
     }
     else
     {
@@ -342,4 +470,42 @@ CPLErr EMURat::CreateColumn( const char *pszFieldName,
     m_cols.push_back(col);
     return CE_None;
 }
-    
+
+bool chunkSortFunction(const EMURatChunk &a, const EMURatChunk &b)
+{
+    return a.startIdx < b.startIdx;
+}
+
+void EMURat::WriteIndex()
+{
+    uint64_t nCols = m_cols.size();
+    VSIFWriteL(&nCols, sizeof(nCols), 1, m_pEMUDS->m_fp);
+    VSIFWriteL(&m_nRowCount, sizeof(m_nRowCount), 1, m_pEMUDS->m_fp);
+     
+    for( int i = 0; i < m_cols.size(); i++ )
+    {
+        // sort first
+        std::sort(m_cols[i].chunks.begin(), m_cols[i].chunks.end(), chunkSortFunction);
+        uint64_t nType = m_cols[i].colType;
+        VSIFWriteL(&nType, sizeof(nType), 1, m_pEMUDS->m_fp);
+        
+        const char *pszName = m_cols[i].sName.c_str();
+        while( *pszName != '\0' )
+        {
+            VSIFWriteL(pszName, sizeof(char), 1, m_pEMUDS->m_fp);
+            pszName++;
+        }
+        VSIFWriteL(pszName, sizeof(char), 1, m_pEMUDS->m_fp); // null byte
+        
+        uint64_t nChunks = m_cols[i].chunks.size();
+        VSIFWriteL(&nChunks, sizeof(nChunks), 1, m_pEMUDS->m_fp);
+        
+        for( auto itr = m_cols[i].chunks.begin(); itr != m_cols[i].chunks.end(); itr++ )
+        {
+            VSIFWriteL(&(*itr).startIdx, sizeof((*itr).startIdx), 1, m_pEMUDS->m_fp);
+            VSIFWriteL(&(*itr).length, sizeof((*itr).length), 1, m_pEMUDS->m_fp);
+            VSIFWriteL(&(*itr).offset, sizeof((*itr).offset), 1, m_pEMUDS->m_fp);
+            VSIFWriteL(&(*itr).compressedSize, sizeof((*itr).compressedSize), 1, m_pEMUDS->m_fp);
+        }
+    }
+}
