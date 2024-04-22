@@ -418,7 +418,7 @@ void EMURasterBand::EstimateStatsFromHistogram()
     for( auto i = m_histogram.begin(); i != m_histogram.end(); i++)
     {
         uint64_t nBin = (i->first - m_dHistMin) / m_dHistStep;
-        m_pHistogram += i->second;
+        m_pHistogram[nBin] += i->second;
     }    
 }
 
