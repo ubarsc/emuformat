@@ -36,6 +36,7 @@
 
 EMURasterBand::EMURasterBand(EMUDataset *pDataset, int nBandIn, GDALDataType eType, 
         bool bThematic, const std::shared_ptr<std::mutex>& other)
+    : m_rat(pDataset, this, other)
 {
     poDS = pDataset;
     nBlockXSize = 512;
@@ -558,3 +559,16 @@ CPLErr EMURasterBand::SetMetadata(char **papszMetadata, const char *pszDomain)
     UpdateMetadataList();
     return CE_None;
 }
+
+GDALRasterAttributeTable *EMURasterBand::GetDefaultRAT()
+{
+    return &m_rat;
+}
+
+CPLErr EMURasterBand::SetDefaultRAT(const GDALRasterAttributeTable *poRAT)
+{
+    CPLError(CE_Failure, CPLE_FileIO,
+            "Setting RAT not yet supported");
+    return CE_Failure;
+}
+

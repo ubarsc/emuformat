@@ -29,15 +29,17 @@
  */
  
 #include "emurat.h"
+#include "emuband.h"
 #include "emucompress.h"
 
 #include <algorithm> 
 
 const int MAX_RAT_CHUNK = 256 * 256;
 
-EMURat::EMURat(EMUDataset *pDS, const std::shared_ptr<std::mutex>& other)
+EMURat::EMURat(EMUDataset *pDS, EMURasterBand *pBand, const std::shared_ptr<std::mutex>& other)
 {
     m_pEMUDS = pDS;
+    m_pEMUBand = pBand;
     m_mutex = other;
     m_nRowCount = 0;
 }
@@ -45,6 +47,13 @@ EMURat::EMURat(EMUDataset *pDS, const std::shared_ptr<std::mutex>& other)
 EMURat::~EMURat()
 {
     
+}
+
+GDALDefaultRasterAttributeTable *EMURat::Clone() const
+{
+    CPLError(CE_Failure, CPLE_FileIO,
+            "Cloning RAT not yet supported");
+    return nullptr;
 }
 
 int EMURat::GetColumnCount() const
@@ -146,6 +155,67 @@ int EMURat::GetRowCount() const
 {
     return m_nRowCount;
 }
+
+const char *EMURat::GetValueAsString( int iRow, int iField ) const
+{
+    // Get ValuesIO do do the work
+    char *apszStrList[1];
+    if( (const_cast<EMURat*>(this))->
+                ValuesIO(GF_Read, iField, iRow, 1, apszStrList ) != CPLE_None )
+    {
+        return "";
+    }
+
+    const_cast<EMURat*>(this)->osWorkingResult = apszStrList[0];
+    CPLFree(apszStrList[0]);
+
+    return osWorkingResult;
+}
+
+int EMURat::GetValueAsInt( int iRow, int iField ) const
+{
+    // Get ValuesIO do do the work
+    int nValue;
+    if( (const_cast<EMURat*>(this))->
+                ValuesIO(GF_Read, iField, iRow, 1, &nValue ) != CE_None )
+    {
+        return 0;
+    }
+
+    return nValue;
+}
+
+double EMURat::GetValueAsDouble( int iRow, int iField ) const
+{
+    // Get ValuesIO do do the work
+    double dfValue;
+    if( (const_cast<EMURat*>(this))->
+                ValuesIO(GF_Read, iField, iRow, 1, &dfValue ) != CE_None )
+    {
+        return 0;
+    }
+
+    return dfValue;
+}
+
+void EMURat::SetValue( int iRow, int iField, const char *pszValue )
+{
+    // Get ValuesIO do do the work
+    ValuesIO(GF_Write, iField, iRow, 1, const_cast<char**>(&pszValue) );
+}
+
+void EMURat::SetValue( int iRow, int iField, double dfValue)
+{
+    // Get ValuesIO do do the work
+    ValuesIO(GF_Write, iField, iRow, 1, &dfValue );
+}
+
+void EMURat::SetValue( int iRow, int iField, int nValue )
+{
+    // Get ValuesIO do do the work
+    ValuesIO(GF_Write, iField, iRow, 1, &nValue );
+}
+
 
 CPLErr EMURat::ValuesIO(GDALRWFlag eRWFlag, int iField, int iStartRow, int iLength, double *pdfData)
 {
@@ -459,6 +529,30 @@ void EMURat::SetRowCount( int iCount )
         m_nRowCount = iCount;
     }
 }
+
+CPLErr EMURat::SetTableType(const GDALRATTableType eInTableType)
+{
+    // TODO: should we do something better here?
+    return CE_None;
+}
+
+GDALRATTableType EMURat::GetTableType() const
+{
+    if(m_pEMUBand->GetThematic())
+    {
+        return GRTT_THEMATIC;
+    }
+    else
+    {
+        return GRTT_ATHEMATIC;
+    }
+}
+
+void EMURat::RemoveStatistics()
+{
+    // should I be clearing the stats on the band here??
+}
+
 
 CPLErr EMURat::CreateColumn( const char *pszFieldName, 
                                 GDALRATFieldType eFieldType, 

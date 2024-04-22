@@ -35,6 +35,7 @@
 #include "gdal_priv.h"
 
 #include "emudataset.h"
+#include "emurat.h"
 
 class EMURasterBand final: public GDALRasterBand
 {
@@ -71,7 +72,10 @@ public:
         const char *pszDomain) override;
     virtual char** GetMetadata(const char *pszDomain) override;
     virtual CPLErr SetMetadata(char **papszMetadata, const char *pszDomain) override;
-	     		
+
+    virtual GDALRasterAttributeTable *GetDefaultRAT() override;
+    virtual CPLErr SetDefaultRAT(const GDALRasterAttributeTable *poRAT) override;
+    	     		
     bool GetThematic() { return m_bThematic;};
 private:
 
@@ -96,6 +100,8 @@ private:
     double m_dStdDev;
     double m_dMedian;
     double m_dMode;
+    
+    EMURat m_rat;
 
     friend class EMUDataset;
 };
