@@ -56,6 +56,14 @@ EMURasterBand::EMURasterBand(EMUDataset *pDataset, int nBandIn, GDALDataType eTy
     m_dStdDev = std::numeric_limits<double>::quiet_NaN();
     m_dMedian = std::numeric_limits<double>::quiet_NaN();
     m_dMode = std::numeric_limits<double>::quiet_NaN();
+
+    m_dHistMin = std::numeric_limits<double>::quiet_NaN();
+    m_dHistMax = std::numeric_limits<double>::quiet_NaN();
+    m_dHistStep = std::numeric_limits<double>::quiet_NaN();
+    m_eHistBinFunc = direct;
+    m_nHistNBins = 0;
+    m_pHistogram = nullptr;
+
     m_papszMetadataList = nullptr;
     UpdateMetadataList();
     
@@ -64,7 +72,11 @@ EMURasterBand::EMURasterBand(EMUDataset *pDataset, int nBandIn, GDALDataType eTy
 
 EMURasterBand::~EMURasterBand()
 {
-    
+    CSLDestroy(m_papszMetadataList);
+    if( m_pHistogram != nullptr)
+    {
+        CPLFree(m_pHistogram);
+    }
 }
 
 CPLErr EMURasterBand::IReadBlock(int nBlockXOff, int nBlockYOff, void *pData)
@@ -350,6 +362,63 @@ void EMURasterBand::EstimateStatsFromHistogram()
         }
         pixCount += i->second;
         lastVal = i->first;
+    }
+    
+    // now the actual histogram
+    if( eDataType == GDT_Byte)
+    {
+        m_dHistMin = 0;
+        m_dHistMax = 256;
+        m_dHistStep = 1.0;
+        m_nHistNBins = 256;
+        m_eHistBinFunc = direct;
+    }
+    else if(GetThematic())
+    {
+        m_dHistMin = 0;
+        m_dHistMax = uint64_t(ceil(m_dMax));
+        m_dHistStep = 1.0;
+        m_nHistNBins = m_dHistMax + 1;
+        m_eHistBinFunc = direct;
+    }
+    else if((eDataType == GDT_Int16) || (eDataType == GDT_UInt16) || (eDataType == GDT_Int32) ||
+        (eDataType == GDT_UInt32) || (eDataType == GDT_Int64) || (eDataType == GDT_UInt64))
+    {
+        uint64_t nHistRange = uint64_t(ceil(m_dMax) - floor(m_dMin));
+        m_dHistMin = m_dMin;
+        m_dHistMax = m_dMax;
+        if( nHistRange <= 256 )
+        {
+            m_nHistNBins = nHistRange;
+            m_dHistStep = 1.0;
+            m_eHistBinFunc = direct;
+        }
+        else
+        {
+            m_nHistNBins = 256;
+            m_eHistBinFunc = linear;
+            m_dHistStep = (m_dHistMax - m_dHistMin) / m_nHistNBins;
+        }
+    }
+    else if((eDataType == GDT_Float32) || (eDataType == GDT_Float64))
+    {
+        m_dHistMin = m_dMin;
+        m_dHistMax = m_dMax;
+        m_nHistNBins = 256;
+        m_eHistBinFunc = linear;
+        if( m_dHistMin == m_dHistMax )
+        {
+            m_dHistMax = m_dHistMin + 0.5;
+            m_nHistNBins = 1;
+        }
+        m_dHistStep = (m_dHistMax - m_dHistMin) / m_nHistNBins;
+    }
+    
+    m_pHistogram = static_cast<uint64_t*>(CPLCalloc(sizeof(uint64_t), m_nHistNBins));
+    for( auto i = m_histogram.begin(); i != m_histogram.end(); i++)
+    {
+        uint64_t nBin = (i->first - m_dHistMin) / m_dHistStep;
+        m_pHistogram += i->second;
     }    
 }
 

@@ -37,6 +37,8 @@
 #include "emudataset.h"
 #include "emurat.h"
 
+enum EHistBinFunctionType {direct, linear};
+
 class EMURasterBand final: public GDALRasterBand
 {
 public:
@@ -100,6 +102,12 @@ private:
     double m_dStdDev;
     double m_dMedian;
     double m_dMode;
+    double m_dHistMin;
+    double m_dHistMax;
+    double m_dHistStep;
+    EHistBinFunctionType m_eHistBinFunc;
+    uint64_t m_nHistNBins;
+    uint64_t *m_pHistogram;
     
     EMURat m_rat;
 
