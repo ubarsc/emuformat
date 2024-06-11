@@ -31,6 +31,14 @@
 #include "emudataset.h"
 #include "emuband.h"
 
+const int S3_MAX_PARTS = 1000;
+const int S3_MIN_PART_SIZE = 50;  // MB - is actually 5, but let's not let it go down that far
+const int S3_MAX_PART_SIZE = 5000;  // MB
+// I have no idea here, but we need to guess the file size so we can work out 
+// the size of each chunk of the multi part upload
+const double AVG_COMPRESSION_RATIO = 0.5;
+const int ONE_MB = 1048576; 
+
 EMUDataset::EMUDataset(VSILFILE *fp, GDALDataType eType, int nXSize, int nYSize, GDALAccess eInAccess)
 {
     m_fp = fp;
@@ -342,8 +350,33 @@ GDALDataset *EMUDataset::Create(const char * pszFilename,
         return NULL;
     }
 
+    char **papszOptions = nullptr;
+    if( STARTS_WITH(pszFilename, "/vsis3") )
+    {
+        // try and determine a sensible chunk size in MB
+        double dApproxFileSize = ((nXSize * nYSize * nBands * 
+            GDALGetDataTypeSizeBytes(eType)) / ONE_MB) * AVG_COMPRESSION_RATIO;
+        int nChunkSize = ceil(dApproxFileSize / S3_MAX_PARTS);
+        if( nChunkSize < S3_MIN_PART_SIZE )
+        {
+            nChunkSize = S3_MIN_PART_SIZE;
+        }
+        
+        if( (nChunkSize * S3_MAX_PARTS) > (S3_MAX_PART_SIZE * S3_MAX_PARTS) )
+        {
+            CPLError(CE_Failure, CPLE_OpenFailed,
+                    "Attempt to create file `%s' failed. Too big for multi part upload",
+                    pszFilename);
+            return NULL;
+        }
+        
+        papszOptions = CSLAppendPrintf(papszOptions, "CHUNK_SIZE=%d", nChunkSize);
+        printf("CHUNK_SIZE=%d dApproxFileSize=%f\n", nChunkSize, dApproxFileSize);
+    }
+
     // Try to create the file.
-    VSILFILE *fp = VSIFOpenL(pszFilename, "w");
+    VSILFILE *fp = VSIFOpenEx2L(pszFilename, "w", FALSE, papszOptions);
+    CSLDestroy(papszOptions);
     if( fp == NULL )
     {
         CPLError(CE_Failure, CPLE_OpenFailed,
