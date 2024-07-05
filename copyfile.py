@@ -29,7 +29,7 @@
 #
 
 import sys
-from rios import applier
+from rios import applier, fileinfo
 
 def copyf(info, inputs, outputs):
     outputs.outf = inputs.inf
@@ -41,10 +41,15 @@ def main():
     outputs = applier.FilenameAssociations()
     outputs.outf = sys.argv[2]
     
+    # is input thematic?
+    info = fileinfo.ImageInfo(sys.argv[1], omitPerBand=True)
+    thematic = info.layerType == 'thematic'
+    
     controls = applier.ApplierControls()
     controls.setCalcStats(False)
     controls.setOutputDriverName('EMU')
     controls.setWindowSize(512, 512)
+    controls.setThematic(thematic)
     
     applier.apply(copyf, inputs, outputs, controls=controls)
 

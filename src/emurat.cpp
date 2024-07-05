@@ -245,9 +245,6 @@ CPLErr EMURat::ValuesIO(GDALRWFlag eRWFlag, int iField, int iStartRow, int iLeng
         iLength = m_nRowCount - iStartRow;
     }
 
-    // TODO: set compression
-    uint8_t compression = COMPRESSION_ZLIB;
-    int iThisBlockLength;
     
     const std::lock_guard<std::mutex> lock(*m_mutex);
     if( eRWFlag == GF_Write) 
@@ -259,6 +256,10 @@ CPLErr EMURat::ValuesIO(GDALRWFlag eRWFlag, int iField, int iStartRow, int iLeng
             return CE_Failure;
         }
 
+        // TODO: set compression
+        uint8_t compression = COMPRESSION_ZLIB;
+        int iThisBlockLength;
+        
         while(iLength > 0)
         {
             if( iLength > MAX_RAT_CHUNK)
@@ -299,6 +300,68 @@ CPLErr EMURat::ValuesIO(GDALRWFlag eRWFlag, int iField, int iStartRow, int iLeng
     }
     else
     {
+        bool bFound = false;
+        size_t startChunk = 0;
+        uint64_t nElsToSkipAtStart = 0;
+        uint64_t nCopiedRows = 0;
+        for( size_t n = 0; n < m_cols[iField].chunks.size(); n++)
+        {
+            if(m_cols[iField].chunks[n].startIdx >= iStartRow )
+            {
+                startChunk = n;
+                nElsToSkipAtStart = m_cols[iField].chunks[n].startIdx - iStartRow;
+                bFound = true;
+                break;
+            }
+        }
+        
+        if( bFound )
+        {
+            while( (nCopiedRows <  iLength) && (startChunk < m_cols[iField].chunks.size()) )
+            {
+                // seek to where this block starts    
+                VSIFSeekL(m_pEMUDS->m_fp, m_cols[iField].chunks[startChunk].offset, SEEK_SET);
+    
+                // read compression type
+                uint8_t compression;
+                VSIFReadL(&compression, sizeof(compression), 1, m_pEMUDS->m_fp);
+    
+                // read the uncompressed data
+                Bytef *pSubData = static_cast<Bytef*>(CPLMalloc(m_cols[iField].chunks[startChunk].compressedSize));
+                VSIFReadL(pSubData, m_cols[iField].chunks[startChunk].compressedSize, 1, m_pEMUDS->m_fp);
+                
+                uint64_t uncompressedSize =  m_cols[iField].chunks[startChunk].length * sizeof(double); 
+                Bytef *pUncompressed = static_cast<Bytef*>(CPLMalloc(uncompressedSize)); 
+                doUncompression(compression, pSubData, m_cols[iField].chunks[startChunk].compressedSize,
+                    pUncompressed, uncompressedSize);
+                double *pData = reinterpret_cast<double*>(pUncompressed);
+                
+                // copy out
+                uint64_t count = 0;
+                while( (nCopiedRows < iLength) && (count < m_cols[iField].chunks[startChunk].length) ) 
+                {
+                    pdfData[nCopiedRows] = pData[nElsToSkipAtStart];
+                    nCopiedRows++;
+                }
+                
+                CPLFree(pSubData);
+                CPLFree(pUncompressed);
+                startChunk++;
+                nElsToSkipAtStart = 0;
+            }
+            
+            while( nCopiedRows < iLength )
+            {
+                // we haven't been able to copy all the data they have requested 
+                // because that much data was never written. Pad with zeros.
+                pdfData[nCopiedRows] = 0;
+                nCopiedRows++;
+            }
+            
+        }
+        
+        
+    
     }
     
     
@@ -336,10 +399,6 @@ CPLErr EMURat::ValuesIO(GDALRWFlag eRWFlag, int iField, int iStartRow, int iLeng
     // we store as int64 internally
     int64_t *pn64Tmp = new int64_t[MAX_RAT_CHUNK];
 
-    // TODO: set compression
-    uint8_t compression = COMPRESSION_ZLIB;
-    int iThisBlockLength;
-    
     const std::lock_guard<std::mutex> lock(*m_mutex);
     if( eRWFlag == GF_Write) 
     {
@@ -349,6 +408,10 @@ CPLErr EMURat::ValuesIO(GDALRWFlag eRWFlag, int iField, int iStartRow, int iLeng
             "The EMU driver only supports writing when creating");
             return CE_Failure;
         }
+
+        // TODO: set compression
+        uint8_t compression = COMPRESSION_ZLIB;
+        int iThisBlockLength;
         
         while(iLength > 0)
         {
@@ -396,6 +459,12 @@ CPLErr EMURat::ValuesIO(GDALRWFlag eRWFlag, int iField, int iStartRow, int iLeng
     }
     else
     {
+        uint64_t nCopiedRows = 0;
+        while(nCopiedRows < iLength)
+        {
+            pnData[nCopiedRows] = 23;
+            nCopiedRows++;
+        }
     }
     
     delete[] pn64Tmp;
@@ -432,10 +501,6 @@ CPLErr EMURat::ValuesIO(GDALRWFlag eRWFlag, int iField, int iStartRow, int iLeng
         iLength = m_nRowCount - iStartRow;
     }
 
-    // TODO: set compression
-    uint8_t compression = COMPRESSION_ZLIB;
-    int iThisBlockLength;
-    
     const std::lock_guard<std::mutex> lock(*m_mutex);
     if( eRWFlag == GF_Write) 
     {
@@ -445,6 +510,10 @@ CPLErr EMURat::ValuesIO(GDALRWFlag eRWFlag, int iField, int iStartRow, int iLeng
             "The EMU driver only supports writing when creating");
             return CE_Failure;
         }
+
+        // TODO: set compression
+        uint8_t compression = COMPRESSION_ZLIB;
+        int iThisBlockLength;
 
         while(iLength > 0)
         {
@@ -504,6 +573,12 @@ CPLErr EMURat::ValuesIO(GDALRWFlag eRWFlag, int iField, int iStartRow, int iLeng
     }
     else
     {
+        uint64_t nCopiedRows = 0;
+        while(nCopiedRows < iLength)
+        {
+            papszStrList[nCopiedRows] = CPLStrdup("Hello");
+            nCopiedRows++;
+        }
     }
     
     
@@ -568,6 +643,52 @@ CPLErr EMURat::CreateColumn( const char *pszFieldName,
 bool chunkSortFunction(const EMURatChunk &a, const EMURatChunk &b)
 {
     return a.startIdx < b.startIdx;
+}
+
+void EMURat::ReadIndex()
+{
+    uint64_t nCols;
+    VSIFReadL(&nCols, sizeof(nCols), 1, m_pEMUDS->m_fp);
+    VSIFReadL(&m_nRowCount, sizeof(m_nRowCount), 1, m_pEMUDS->m_fp);
+
+    m_cols.clear();
+    for( int i = 0; i < nCols; i++ )
+    {
+        EMURatColumn col;
+        uint64_t nType;
+        VSIFReadL(&nType, sizeof(nType), 1, m_pEMUDS->m_fp);
+        col.colType = static_cast<GDALRATFieldType>(nType);
+        
+        std::string name;
+        char ch;
+        while(true)
+        {
+            VSIFReadL(&ch, sizeof(ch), 1, m_pEMUDS->m_fp);
+            if( ch == '\0')
+            {
+                break;
+            }
+            else
+            {
+                name += ch;
+            }
+        }
+        col.sName = name;
+        
+        uint64_t nChunks;
+        VSIFReadL(&nChunks, sizeof(nChunks), 1, m_pEMUDS->m_fp);
+        for( int n = 0; n < nChunks; n++)
+        {
+            EMURatChunk chunk;
+            VSIFReadL(&chunk.startIdx, sizeof(chunk.startIdx), 1, m_pEMUDS->m_fp);
+            VSIFReadL(&chunk.length, sizeof(chunk.length), 1, m_pEMUDS->m_fp);
+            VSIFReadL(&chunk.offset, sizeof(chunk.offset), 1, m_pEMUDS->m_fp);
+            VSIFReadL(&chunk.compressedSize, sizeof(chunk.compressedSize), 1, m_pEMUDS->m_fp);
+            col.chunks.push_back(chunk);
+        }
+        
+        m_cols.push_back(col);
+    }
 }
 
 void EMURat::WriteIndex()

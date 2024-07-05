@@ -563,7 +563,7 @@ CPLErr EMURasterBand::SetMetadataItem(const char *pszName, const char *pszValue,
         }
         else
         {
-            m_bThematic = false;
+            m_bThematic = true;
         }
         UpdateMetadataList();
         return CE_None;

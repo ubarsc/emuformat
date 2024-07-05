@@ -93,6 +93,8 @@ public:
     virtual CPLErr        CreateColumn( const char *pszFieldName, 
                                 GDALRATFieldType eFieldType, 
                                 GDALRATFieldUsage eFieldUsage ) override;
+    void ReadIndex();
+
 private:
 
     void WriteIndex();
