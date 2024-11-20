@@ -91,6 +91,9 @@ public:
                                 int nXSize, int nYSize, int nBands,
                                 GDALDataType eType,
                                 char **);
+    static GDALDataset *CreateCopy( const char * pszFilename, GDALDataset *pSrcDs,
+                                int bStrict, char **  papszParmList, 
+                                GDALProgressFunc pfnProgress, void *pProgressData );
 
     CPLErr GetGeoTransform( double * padfTransform ) override;
     CPLErr SetGeoTransform( double * padfTransform ) override;
@@ -102,10 +105,18 @@ public:
     CPLErr Close();
 #endif
     
+protected:
+    virtual CPLErr IBuildOverviews(const char *pszResampling, int nOverviews, const int *panOverviewList, 
+                                    int nListBands, const int *panBandList, GDALProgressFunc pfnProgress, 
+                                    void *pProgressData, CSLConstList papszOptions) override;
+    
 private:
     void setTileOffset(uint64_t o, uint64_t band, uint64_t x, 
         uint64_t y, vsi_l_offset offset, uint64_t size, uint64_t uncompressedSize);
     EMUTileValue getTileOffset(uint64_t o, uint64_t band, uint64_t x, uint64_t y);
+    static VSILFILE *CreateEMU(const char * pszFilename,
+                                int nXSize, int nYSize, int nBands,
+                                GDALDataType eType);
 
 
     VSILFILE  *m_fp = nullptr;

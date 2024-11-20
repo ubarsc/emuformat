@@ -37,16 +37,24 @@
 #include "emudataset.h"
 #include "emurat.h"
 
-enum EHistBinFunctionType {direct, linear};
+class EMUBaseBand: public GDALRasterBand
+{
+public:
+    EMUBaseBand(EMUDataset *, int nBandIn, GDALDataType eType, uint64_t nLevel, const std::shared_ptr<std::mutex>& other);
+    ~EMUBaseBand();
 
-class EMURasterBand final: public GDALRasterBand
+    virtual CPLErr IReadBlock( int, int, void * ) override;
+    virtual CPLErr IWriteBlock( int, int, void * ) override;
+private:
+    std::shared_ptr<std::mutex> m_mutex;
+    uint64_t m_nLevel; 
+}
+
+class EMURasterBand final: public EMUBaseBand
 {
 public:
     EMURasterBand(EMUDataset *, int nBandIn, GDALDataType eType, bool bThematic, const std::shared_ptr<std::mutex>& other);
     ~EMURasterBand();
-    
-    virtual CPLErr IReadBlock( int, int, void * ) override;
-    virtual CPLErr IWriteBlock( int, int, void * ) override;
 
     virtual double GetNoDataValue(int *pbSuccess = nullptr) override;
     virtual int64_t GetNoDataValueAsInt64(int *pbSuccess = nullptr) override;
@@ -56,15 +64,9 @@ public:
     virtual CPLErr SetNoDataValueAsUInt64(uint64_t nNoData) override;
     virtual CPLErr DeleteNoDataValue() override;
     
-    virtual double GetMinimum(int *pbSuccess) override;
-    virtual double GetMaximum(int *pbSuccess) override;
-    virtual CPLErr ComputeRasterMinMax(int bApproxOK, double *adfMinMax) override;
     virtual CPLErr GetStatistics(int bApproxOK, int bForce, double *pdfMin,
                                  double *pdfMax, double *pdfMean,
                                  double *padfStdDev) override;
-    virtual CPLErr ComputeStatistics(int bApproxOK, double *pdfMin, double *pdfMax,
-        double *pdfMean, double *pdfStdDev,	GDALProgressFunc pfnProgress,
-        void *pProgressData) override;
 	virtual CPLErr SetStatistics(double dfMin, double dfMax, double dfMean,	
 	    double dfStdDev) override;
 	    
@@ -77,39 +79,34 @@ public:
 
     virtual GDALRasterAttributeTable *GetDefaultRAT() override;
     virtual CPLErr SetDefaultRAT(const GDALRasterAttributeTable *poRAT) override;
-    	     		
+
+    // virtual methods for overview support
+    int GetOverviewCount() override;
+    GDALRasterBand* GetOverview(int nOverview) override;
+
+    // non virtual function to create the objects
+    void CreateOverviews(int nOverviews);
+
     bool GetThematic() { return m_bThematic;};
+   
 private:
 
-    void AccumulateData(void *pData, size_t nLength, size_t nXValid);
-    template<class T>
-    void AccumulateDataForType(void *pData, size_t nLength, size_t nXValid);
-    void EstimateStatsFromHistogram();
-    void SetMetadataFromStats();
     void UpdateMetadataList();
 
 
     bool m_bNoDataSet;
     int64_t m_nNoData;
     bool m_bThematic;
-    std::map<uint32_t, uint32_t> m_histogram;
-    std::shared_ptr<std::mutex> m_mutex;
     char               **m_papszMetadataList; // CPLStringList of metadata
     
     double m_dMin;
     double m_dMax;
     double m_dMean;
     double m_dStdDev;
-    double m_dMedian;
-    double m_dMode;
-    double m_dHistMin;
-    double m_dHistMax;
-    double m_dHistStep;
-    EHistBinFunctionType m_eHistBinFunc;
-    uint64_t m_nHistNBins;
-    uint64_t *m_pHistogram;
     
     EMURat m_rat;
+    int                  m_nOverviews;
+    EMUBaseBand **m_panOverviewBands;
 
     friend class EMUDataset;
 };

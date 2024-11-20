@@ -180,6 +180,27 @@ EMUTileValue EMUDataset::getTileOffset(uint64_t o, uint64_t band, uint64_t x, ui
 }
 
 
+CPLErr EMUDataset::IBuildOverviews(const char *pszResampling, int nOverviews, const int *panOverviewList, 
+                                    int nListBands, const int *panBandList, GDALProgressFunc pfnProgress, 
+                                    void *pProgressData, CSLConstList papszOptions)
+{
+    // this is a bit of a fake since we always expect this to be only called when 
+    // nothing has been written to the file (yet)
+    // go through the list of bands that have been passed in
+    int nCurrentBand;
+    for( int nBandCount = 0; nBandCount < nListBands; nBandCount++ )
+    {
+        // get the band number
+        nCurrentBand = panBandList[nBandCount];
+        // get the band
+        EMURasterBand *pBand = (EMURasterBand*)this->GetRasterBand(nCurrentBand);
+        // create the overview objects
+        pBand->CreateOverviews( nOverviews );
+    }
+    return CE_None;
+}
+
+
 GDALDataset *EMUDataset::Open(GDALOpenInfo *poOpenInfo)
 {
     if (!Identify(poOpenInfo))
@@ -201,7 +222,9 @@ GDALDataset *EMUDataset::Open(GDALOpenInfo *poOpenInfo)
         return nullptr;
     }
     
-    // TODO: get version    
+    // flags
+    uint32_t nFlags;
+    memcpy(&nFlags, &poOpenInfo->pabyHeader[3], sizeof(nFlags));
     
     // Check that the file pointer from GDALOpenInfo* is available.
     if( poOpenInfo->fpL == nullptr )
@@ -333,23 +356,10 @@ int EMUDataset::Identify(GDALOpenInfo *poOpenInfo)
     return TRUE;
 }
 
-GDALDataset *EMUDataset::Create(const char * pszFilename,
+VSILFILE *EMUDataset::CreateEMU(const char * pszFilename,
                                 int nXSize, int nYSize, int nBands,
-                                GDALDataType eType,
-                                char ** /* papszParamList */)
+                                GDALDataType eType)
 {
-    if( (eType < GDT_Byte ) || (eType > GDT_Int16) )
-    {
-        // for now, I'm worried about building the histogram otherwise
-        // things will blow out
-        CPLError(
-            CE_Failure, CPLE_AppDefined,
-            "Attempt to create EMU labeled dataset with an illegal "
-            "data type (%s).",
-            GDALGetDataTypeName(eType));
-        return NULL;
-    }
-
     char **papszOptions = nullptr;
     if( STARTS_WITH(pszFilename, "/vsis3") )
     {
@@ -377,6 +387,16 @@ GDALDataset *EMUDataset::Create(const char * pszFilename,
     // Try to create the file.
     VSILFILE *fp = VSIFOpenEx2L(pszFilename, "w", FALSE, papszOptions);
     CSLDestroy(papszOptions);
+    
+    return fp;    
+}
+
+GDALDataset *EMUDataset::Create(const char * pszFilename,
+                                int nXSize, int nYSize, int nBands,
+                                GDALDataType eType,
+                                char ** /* papszParamList */)
+{
+    VSILFILE *fp = CreateEMU(pszFilename, nXSize, nYSize, nBands, eType);
     if( fp == NULL )
     {
         CPLError(CE_Failure, CPLE_OpenFailed,
@@ -386,6 +406,8 @@ GDALDataset *EMUDataset::Create(const char * pszFilename,
     }
     
     VSIFPrintfL(fp, "EMU%04d", EMU_VERSION);
+    uint32_t nFlags = 0;
+    VSIFWriteL(&nFlags, sizeof(nFlags), 1, m_fp);
     
     EMUDataset *pDS = new EMUDataset(fp, eType, nXSize, nYSize, GA_Update);
     for( int n = 0; n < nBands; n++ )
@@ -393,6 +415,58 @@ GDALDataset *EMUDataset::Create(const char * pszFilename,
         pDS->SetBand(n + 1, new EMURasterBand(pDS, n + 1, eType, false, pDS->m_mutex));
     }
     
+    return pDS;
+}
+
+GDALDataset *EMUDataset::CreateCopy( const char * pszFilename, GDALDataset *pSrcDs,
+                                int bStrict, char **  papszParmList, 
+                                GDALProgressFunc pfnProgress, void *pProgressData )
+{
+    int nXSize = pSrcDs->GetRasterXSize();
+    int nYSize = pSrcDs->GetRasterYSize();
+    int nBands = pSrcDs->GetRasterCount();
+    GDALDataType eType = pSrcDs->GetRasterBand(1)->GetRasterDataType();
+
+    VSILFILE *fp = CreateEMU(pszFilename, nXSize, nYSize, nBands, eType);
+    if( fp == NULL )
+    {
+        CPLError(CE_Failure, CPLE_OpenFailed,
+                "Attempt to create file `%s' failed.",
+                pszFilename);
+        return NULL;
+    }
+    
+    VSIFPrintfL(fp, "EMU%04d", EMU_VERSION);
+    uint32_t nFlags = 1;  // COG
+    VSIFWriteL(&nFlags, sizeof(nFlags), 1, m_fp);
+    
+    EMUDataset *pDS = new EMUDataset(fp, eType, nXSize, nYSize, GA_Update);
+    for( int n = 0; n < nBands; n++ )
+    {
+        pDS->SetBand(n + 1, new EMURasterBand(pDS, n + 1, eType, false, pDS->m_mutex));
+    }
+    
+    // find the highest overview level
+    int nMaxOverview = 0;
+    for( int n = 0; n < nBands; n++ )
+    {
+        GDALRasterBand *pBand = pDS->GetBand(n);
+        int nOverviews = pBand->GetOverviewCount();
+        if( nOverviews > nMaxOverview )
+        {
+            nMaxOverview = nOverviews;
+        }
+    }
+    
+    // now go through each level and then do each band
+    for( int nOverviewLevel = nMaxOverview; nOverviewLevel > 0; nOverviewLevel--)
+    {
+        for( int nBand = 0; nBand < nBands; nBand++ )
+        {
+            
+        }
+    }
+        
     return pDS;
 }
 
@@ -447,10 +521,15 @@ void GDALRegister_EMU()
     poDriver->SetMetadataItem(GDAL_DMD_LONGNAME, "UBARSC Streaming Format (.emu)");
     poDriver->SetMetadataItem(GDAL_DMD_EXTENSIONS, "emu");
     poDriver->SetMetadataItem(GDAL_DCAP_VIRTUALIO, "YES");
+    poDriver->SetMetadataItem(GDAL_DCAP_CREATE, "YES");
+    poDriver->SetMetadataItem(GDAL_DCAP_CREATECOPY, "YES");
+    poDriver->SetMetadataItem(GDAL_DMD_CREATIONDATATYPES, 
+            "Byte Int8 Int16 UInt16 Int32 UInt32 Int64 UInt64 Float32 Float64");
 
     poDriver->pfnOpen = EMUDataset::Open;
     poDriver->pfnIdentify = EMUDataset::Identify;
     poDriver->pfnCreate = EMUDataset::Create;
+    poDriver->pfnCreateCopy = EMUDataset::CreateCopy;
 
     GetGDALDriverManager()->RegisterDriver(poDriver);
 }

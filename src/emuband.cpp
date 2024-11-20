@@ -34,52 +34,24 @@
 #include "emuband.h"
 #include "emucompress.h"
 
-EMURasterBand::EMURasterBand(EMUDataset *pDataset, int nBandIn, GDALDataType eType, 
-        bool bThematic, const std::shared_ptr<std::mutex>& other)
-    : m_rat(pDataset, this, other)
+EMUBaseBand::EMUBaseBand(EMUDataset *pDataset, int nBandIn, GDALDataType eType, 
+        uint64_t nLevel, const std::shared_ptr<std::mutex>& other)
 {
     poDS = pDataset;
     nBlockXSize = 512;
     nBlockYSize = 512;
     nBand = nBandIn;
     eDataType = eType;
-    m_bNoDataSet = false;
-    m_nNoData = 0;
-    m_bThematic = bThematic;
-
-    nRasterXSize = pDataset->GetRasterXSize();          // ask the dataset for the total image size
-    nRasterYSize = pDataset->GetRasterYSize();
-    
-    m_dMin = std::numeric_limits<double>::quiet_NaN();
-    m_dMax = std::numeric_limits<double>::quiet_NaN();
-    m_dMean = std::numeric_limits<double>::quiet_NaN();
-    m_dStdDev = std::numeric_limits<double>::quiet_NaN();
-    m_dMedian = std::numeric_limits<double>::quiet_NaN();
-    m_dMode = std::numeric_limits<double>::quiet_NaN();
-
-    m_dHistMin = std::numeric_limits<double>::quiet_NaN();
-    m_dHistMax = std::numeric_limits<double>::quiet_NaN();
-    m_dHistStep = std::numeric_limits<double>::quiet_NaN();
-    m_eHistBinFunc = direct;
-    m_nHistNBins = 0;
-    m_pHistogram = nullptr;
-
-    m_papszMetadataList = nullptr;
-    UpdateMetadataList();
-    
+    m_nLevel = nLevel;    
     m_mutex = other;
 }
 
-EMURasterBand::~EMURasterBand()
+EMUBaseBand::~EMUBaseBand()
 {
-    CSLDestroy(m_papszMetadataList);
-    if( m_pHistogram != nullptr)
-    {
-        CPLFree(m_pHistogram);
-    }
+    
 }
 
-CPLErr EMURasterBand::IReadBlock(int nBlockXOff, int nBlockYOff, void *pData)
+CPLErr EMUBaseBand::IReadBlock(int nBlockXOff, int nBlockYOff, void *pData)
 {
     if(poDS->GetAccess() == GA_Update)
     {
@@ -95,7 +67,7 @@ CPLErr EMURasterBand::IReadBlock(int nBlockXOff, int nBlockYOff, void *pData)
     EMUTileValue val;
     try
     {
-        val = poEMUDS->getTileOffset(0, nBand, nBlockXOff, nBlockYOff);
+        val = poEMUDS->getTileOffset(m_nLevel, nBand, nBlockXOff, nBlockYOff);
     }
     catch(const std::out_of_range& oor)
     {
@@ -153,7 +125,7 @@ CPLErr EMURasterBand::IReadBlock(int nBlockXOff, int nBlockYOff, void *pData)
     return CE_None;
 }
 
-CPLErr EMURasterBand::IWriteBlock(int nBlockXOff, int nBlockYOff, void *pData)
+CPLErr EMUBaseBand::IWriteBlock(int nBlockXOff, int nBlockYOff, void *pData)
 {
     const std::lock_guard<std::mutex> lock(*m_mutex);
 
@@ -189,8 +161,6 @@ CPLErr EMURasterBand::IWriteBlock(int nBlockXOff, int nBlockYOff, void *pData)
             nDstIdx += (nXValid * typeSize);
         }
         
-        AccumulateData(pSubData, nXValid * nYValid, nXValid);
-        
         bool bFree;
         Bytef *pCompressed = doCompression(compression, pSubData, uncompressedSize, &compressedSize, &bFree);
         VSIFWriteL(pCompressed, compressedSize, 1, poEMUDS->m_fp);
@@ -203,8 +173,6 @@ CPLErr EMURasterBand::IWriteBlock(int nBlockXOff, int nBlockYOff, void *pData)
     else
     {
         // full data
-        AccumulateData(pData, nXValid * nYValid, nXValid);
-
         bool bFree;
         void *pCompressed = doCompression(compression, static_cast<Bytef*>(pData), uncompressedSize, &compressedSize, &bFree);
         VSIFWriteL(pCompressed, compressedSize, 1, poEMUDS->m_fp);
@@ -215,11 +183,45 @@ CPLErr EMURasterBand::IWriteBlock(int nBlockXOff, int nBlockYOff, void *pData)
     }
     
     // update map
-    poEMUDS->setTileOffset(0, nBand, nBlockXOff, nBlockYOff, tileOffset, compressedSize, uncompressedSize);
+    poEMUDS->setTileOffset(m_nLevel, nBand, nBlockXOff, nBlockYOff, tileOffset, compressedSize, uncompressedSize);
 
-    // TODO: read data to work out stats and pyramid layers 
-    
     return CE_None;
+}
+
+EMURasterBand::EMURasterBand(EMUDataset *pDataset, int nBandIn, GDALDataType eType, 
+        bool bThematic, const std::shared_ptr<std::mutex>& other)
+    : EMUBaseBand(pDataset, nBandIn, eType, 0, other),
+        m_rat(pDataset, this, other)
+{
+    m_bNoDataSet = false;
+    m_nNoData = 0;
+    m_bThematic = bThematic;
+
+    nRasterXSize = pDataset->GetRasterXSize();          // ask the dataset for the total image size
+    nRasterYSize = pDataset->GetRasterYSize();
+    
+    m_dMin = std::numeric_limits<double>::quiet_NaN();
+    m_dMax = std::numeric_limits<double>::quiet_NaN();
+    m_dMean = std::numeric_limits<double>::quiet_NaN();
+    m_dStdDev = std::numeric_limits<double>::quiet_NaN();
+
+    // initialise overview variables
+    m_nOverviews = 0;
+    m_panOverviewBands = nullptr;
+
+    m_papszMetadataList = nullptr;
+    UpdateMetadataList();
+}
+
+EMURasterBand::~EMURasterBand()
+{
+    for( int nCount = 0; nCount < m_nOverviews; nCount++ )
+    {
+        delete m_panOverviewBands[nCount];
+    }
+    CPLFree(m_panOverviewBands);
+
+    CSLDestroy(m_papszMetadataList);
 }
 
 double EMURasterBand::GetNoDataValue(int *pbSuccess/* = nullptr*/)
@@ -270,197 +272,6 @@ CPLErr EMURasterBand::DeleteNoDataValue()
     return CE_None;
 }
 
-void EMURasterBand::AccumulateData(void *pData, size_t nLength, size_t nXValid)
-{
-    switch(eDataType)
-    {
-        case GDT_Byte:
-            AccumulateDataForType<uint8_t>(pData, nLength, nXValid);
-            break;
-        case GDT_UInt16:
-            AccumulateDataForType<uint16_t>(pData, nLength, nXValid);
-            break;
-        case GDT_Int16:
-            AccumulateDataForType<int16_t>(pData, nLength, nXValid);
-            break;
-        default:
-            fprintf(stderr, "Unknown pixel type\n");
-            break;
-    }
-}
-
-// accumulate the raster data into the histogram
-template<class T>
-void EMURasterBand::AccumulateDataForType(void *pData, size_t nLength, size_t nXValid)
-{
-    T *pTypeData = static_cast<T*>(pData);
-    for( size_t n = 0; n < nLength; n++ )
-    {
-        T val = pTypeData[n];
-        if( m_bNoDataSet && (val == m_nNoData))
-        {
-            continue;
-        }
-        auto search = m_histogram.find(val);
-        if( search != m_histogram.end() )
-        {
-            // update 
-            m_histogram[val] = m_histogram[val]++;
-        }
-        else
-        {
-            // set 
-            m_histogram[val] = 1;
-        }
-    }
-}
-
-void EMURasterBand::EstimateStatsFromHistogram()
-{
-    // histogram stored as a std::map so keys should be sorted
-    // (important for median, below)    
-    double dSum = 0;
-    uint64_t pixCount = 0;
-    uint32_t nCountAtMode = 0;
-    for( auto i = m_histogram.begin(); i != m_histogram.end(); i++)
-    {
-        if( std::isnan(m_dMin ) || (i->first < m_dMin) )
-        {
-            m_dMin = i->first;
-        }
-        if( std::isnan(m_dMax ) || (i->first > m_dMax) )
-        {
-            m_dMax = i->first;
-        }
-        if( std::isnan(m_dMode) || (i->second > nCountAtMode))
-        {
-            m_dMode = i->first;
-            nCountAtMode = i->second;
-        }
-        dSum += (i->first * i->second);
-        pixCount += i->second;
-    }
-    
-    m_dMean = dSum / pixCount;
-    double dSumSq = 0;
-    for( auto i = m_histogram.begin(); i != m_histogram.end(); i++)
-    {
-        dSumSq += (i->second * pow(i->first - m_dMean, 2));
-    }
-    double dVariance = dSumSq / pixCount;
-    m_dStdDev = sqrt(dVariance);
-    
-    uint64_t nCountAtMedian = pixCount / 2;
-    pixCount = 0;
-    uint32_t lastVal = 0;
-    for( auto i = m_histogram.begin(); i != m_histogram.end(); i++)
-    {
-        if( pixCount > nCountAtMedian)
-        {
-            m_dMedian = lastVal;
-            break;
-        }
-        pixCount += i->second;
-        lastVal = i->first;
-    }
-    
-    // now the actual histogram
-    if( eDataType == GDT_Byte)
-    {
-        m_dHistMin = 0;
-        m_dHistMax = 256;
-        m_dHistStep = 1.0;
-        m_nHistNBins = 256;
-        m_eHistBinFunc = direct;
-    }
-    else if(GetThematic())
-    {
-        m_dHistMin = 0;
-        m_dHistMax = uint64_t(ceil(m_dMax));
-        m_dHistStep = 1.0;
-        m_nHistNBins = m_dHistMax + 1;
-        m_eHistBinFunc = direct;
-    }
-    else if((eDataType == GDT_Int16) || (eDataType == GDT_UInt16) || (eDataType == GDT_Int32) ||
-        (eDataType == GDT_UInt32) || (eDataType == GDT_Int64) || (eDataType == GDT_UInt64))
-    {
-        uint64_t nHistRange = uint64_t(ceil(m_dMax) - floor(m_dMin));
-        m_dHistMin = m_dMin;
-        m_dHistMax = m_dMax;
-        if( nHistRange <= 256 )
-        {
-            m_nHistNBins = nHistRange;
-            m_dHistStep = 1.0;
-            m_eHistBinFunc = direct;
-        }
-        else
-        {
-            m_nHistNBins = 256;
-            m_eHistBinFunc = linear;
-            m_dHistStep = (m_dHistMax - m_dHistMin) / m_nHistNBins;
-        }
-    }
-    else if((eDataType == GDT_Float32) || (eDataType == GDT_Float64))
-    {
-        m_dHistMin = m_dMin;
-        m_dHistMax = m_dMax;
-        m_nHistNBins = 256;
-        m_eHistBinFunc = linear;
-        if( m_dHistMin == m_dHistMax )
-        {
-            m_dHistMax = m_dHistMin + 0.5;
-            m_nHistNBins = 1;
-        }
-        m_dHistStep = (m_dHistMax - m_dHistMin) / m_nHistNBins;
-    }
-    
-    m_pHistogram = static_cast<uint64_t*>(CPLCalloc(sizeof(uint64_t), m_nHistNBins));
-    for( auto i = m_histogram.begin(); i != m_histogram.end(); i++)
-    {
-        uint64_t nBin = (i->first - m_dHistMin) / m_dHistStep;
-        m_pHistogram[nBin] += i->second;
-    }    
-}
-
-double EMURasterBand::GetMinimum(int *pbSuccess)
-{
-    if(poDS->GetAccess() == GA_Update)
-    {
-        CPLError(CE_Failure, CPLE_NotSupported,
-             "The EMU driver only supports retrieving stats when the file is open in read only mode.");
-        *pbSuccess = 0;
-        return 0.0;
-    }
-    *pbSuccess = 1;
-    return m_dMin;
-}
-
-double EMURasterBand::GetMaximum(int *pbSuccess)
-{
-    if(poDS->GetAccess() == GA_Update)
-    {
-        CPLError(CE_Failure, CPLE_NotSupported,
-             "The EMU driver only supports retrieving stats when the file is open in read only mode.");
-        *pbSuccess = 0;
-        return 0.0;
-    }
-    *pbSuccess = 1;
-    return m_dMax;
-}
-
-CPLErr EMURasterBand::ComputeRasterMinMax(int bApproxOK, double *adfMinMax)
-{
-    if(poDS->GetAccess() == GA_Update)
-    {
-        CPLError(CE_Failure, CPLE_NotSupported,
-             "The EMU driver only supports retrieving stats when the file is open in read only mode.");
-        return CE_Failure;
-    }
-    adfMinMax[0] = m_dMin;
-    adfMinMax[1] = m_dMax;
-    return CE_None;
-}
-
 CPLErr EMURasterBand::GetStatistics(int bApproxOK, int bForce, double *pdfMin,
                                  double *pdfMax, double *pdfMean,
                                  double *padfStdDev)
@@ -504,9 +315,12 @@ CPLErr EMURasterBand::ComputeStatistics(int bApproxOK, double *pdfMin, double *p
 CPLErr EMURasterBand::SetStatistics(double dfMin, double dfMax, double dfMean,	
 	    double dfStdDev)
 {
-    CPLError(CE_Failure, CPLE_NotSupported,
-         "The EMU driver only supports calculating stats itself.");
-    return CE_Failure;
+    m_dMin = dfMin;
+    m_dMax = dfMax;
+    m_dMean = dfMean;
+    m_dStdDev = dfStdDev;
+    UpdateMetadataList();
+    return CE_None;
 }
 
 void EMURasterBand::UpdateMetadataList()
@@ -530,19 +344,10 @@ void EMURasterBand::UpdateMetadataList()
     osWorkingResult.Printf( "%f", m_dMean);
     m_papszMetadataList = CSLSetNameValue(m_papszMetadataList, "STATISTICS_MEAN", osWorkingResult);
 
-    osWorkingResult.Printf( "%f", m_dMedian);
-    m_papszMetadataList = CSLSetNameValue(m_papszMetadataList, "STATISTICS_MEDIAN", osWorkingResult);
-
     osWorkingResult.Printf( "%f", m_dStdDev);
     m_papszMetadataList = CSLSetNameValue(m_papszMetadataList, "STATISTICS_STDDEV", osWorkingResult);
 
-    osWorkingResult.Printf( "%f", m_dMode);
-    m_papszMetadataList = CSLSetNameValue(m_papszMetadataList, "STATISTICS_MODE", osWorkingResult);
-    
-    m_papszMetadataList = CSLSetNameValue(m_papszMetadataList, "STATISTICS_SKIPFACTORX", "1");
-    m_papszMetadataList = CSLSetNameValue(m_papszMetadataList, "STATISTICS_SKIPFACTORY", "1");
-
-    // TODO: STATISTICS_HISTO*
+    // TODO: STATISTICS_HISTO* from RAT (if set)
 }
 
 CPLErr EMURasterBand::SetMetadataItem(const char *pszName, const char *pszValue, 
@@ -570,9 +375,8 @@ CPLErr EMURasterBand::SetMetadataItem(const char *pszName, const char *pszValue,
     }
     else
     {
-        CPLError(CE_Failure, CPLE_NotSupported,
-             "The EMU driver only supports calculating stats itself.");
-        return CE_Failure;
+        CSLSetNameValue(m_papszMetadataList, pszName, pszValue);
+        return CE_None;
     }    
 }
 
@@ -622,7 +426,9 @@ CPLErr EMURasterBand::SetMetadata(char **papszMetadata, const char *pszDomain)
                 m_bThematic = true;
             }
         }
-        // ignore any others.
+        
+        CSLSetNameValue(m_papszMetadataList, pszName, pszValue);
+        
         nIndex++;
     }
     UpdateMetadataList();
@@ -641,3 +447,32 @@ CPLErr EMURasterBand::SetDefaultRAT(const GDALRasterAttributeTable *poRAT)
     return CE_Failure;
 }
 
+int EMURasterBand::GetOverviewCount()
+{
+    return m_nOverviews;
+}
+    
+GDALRasterBand* EMURasterBand::GetOverview(int nOverview)
+{
+    if( nOverview >= m_nOverviews )
+    {
+        return nullptr;
+    }
+    else
+    {
+        return m_panOverviewBands[nOverview];
+    }
+}
+
+void EMURasterBand::CreateOverviews(int nOverviews)
+{
+    m_panOverviewBands = (EMUBaseBand**)CPLMalloc(sizeof(EMUBaseBand*) * nOverviews);
+    m_nOverviews = nOverviews;
+
+    // loop through and create the overviews
+    // don't actually need to know their size at all...
+    for( int nCount = 0; nCount < m_nOverviews; nCount++ )
+    {
+        m_panOverviewBands[nCount] = new EMUBaseBand(poDS, nBand, eDataType, nCount + 1, m_mutex);
+    }
+}
