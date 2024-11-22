@@ -82,7 +82,7 @@ struct EMUTileValue
 class EMUDataset final: public GDALDataset
 {
 public:
-    EMUDataset(VSILFILE *, GDALDataType eType, int nXSize, int nYSize, GDALAccess eInAccess);
+    EMUDataset(VSILFILE *, GDALDataType eType, int nXSize, int nYSize, GDALAccess eInAccess, bool bCloudOptimised, int nTileSize);
     ~EMUDataset();
 
     static GDALDataset *Open( GDALOpenInfo * );
@@ -123,11 +123,12 @@ private:
     OGRSpatialReference m_oSRS{};
     std::unordered_map<EMUTileKey, EMUTileValue> m_tileOffsets;
     double m_padfTransform[6];
-    uint64_t m_tileSize;
+    uint32_t m_tileSize;
     std::shared_ptr<std::mutex> m_mutex;
     GDALDataType m_eType;
+    bool m_bCloudOptimised;
     
-    friend class EMURasterBand;
+    friend class EMUBaseBand;
     friend class EMURat;
 };
 #endif //EMUDATASET_H

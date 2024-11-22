@@ -35,13 +35,15 @@
 #include "emucompress.h"
 
 EMUBaseBand::EMUBaseBand(EMUDataset *pDataset, int nBandIn, GDALDataType eType, 
-        uint64_t nLevel, const std::shared_ptr<std::mutex>& other)
+        uint64_t nLevel, int nXSize, int nYSize, int nBlockSize, const std::shared_ptr<std::mutex>& other)
 {
     poDS = pDataset;
-    nBlockXSize = 512;
-    nBlockYSize = 512;
+    nBlockXSize = nBlockSize;
+    nBlockYSize = nBlockSize;
     nBand = nBandIn;
     eDataType = eType;
+    nRasterXSize = nXSize;
+    nRasterYSize = nYSize;
     m_nLevel = nLevel;    
     m_mutex = other;
 }
@@ -189,17 +191,14 @@ CPLErr EMUBaseBand::IWriteBlock(int nBlockXOff, int nBlockYOff, void *pData)
 }
 
 EMURasterBand::EMURasterBand(EMUDataset *pDataset, int nBandIn, GDALDataType eType, 
-        bool bThematic, const std::shared_ptr<std::mutex>& other)
-    : EMUBaseBand(pDataset, nBandIn, eType, 0, other),
+        bool bThematic, int nXSize, int nYSize, int nBlockSize, const std::shared_ptr<std::mutex>& other)
+    : EMUBaseBand(pDataset, nBandIn, eType, 0, nXSize, nYSize, nBlockSize, other),
         m_rat(pDataset, this, other)
 {
     m_bNoDataSet = false;
     m_nNoData = 0;
     m_bThematic = bThematic;
 
-    nRasterXSize = pDataset->GetRasterXSize();          // ask the dataset for the total image size
-    nRasterYSize = pDataset->GetRasterYSize();
-    
     m_dMin = std::numeric_limits<double>::quiet_NaN();
     m_dMax = std::numeric_limits<double>::quiet_NaN();
     m_dMean = std::numeric_limits<double>::quiet_NaN();
@@ -292,26 +291,6 @@ CPLErr EMURasterBand::GetStatistics(int bApproxOK, int bForce, double *pdfMin,
     return CE_None;
 }
 
-CPLErr EMURasterBand::ComputeStatistics(int bApproxOK, double *pdfMin, double *pdfMax,
-		double *pdfMean, double *pdfStdDev,	GDALProgressFunc pfnProgress,
-		void *pProgressData) 		
-{
-    // ignore bApproxOK and bForce
-    
-    if(poDS->GetAccess() == GA_Update)
-    {
-        CPLError(CE_Failure, CPLE_NotSupported,
-             "The EMU driver only supports retrieving stats when the file is open in read only mode.");
-        return CE_Failure;
-    }
-    
-    *pdfMin = m_dMin;
-    *pdfMax = m_dMax;
-    *pdfMean = m_dMean;
-    *pdfStdDev = m_dStdDev;
-    return CE_None;
-}
-
 CPLErr EMURasterBand::SetStatistics(double dfMin, double dfMax, double dfMean,	
 	    double dfStdDev)
 {
@@ -375,7 +354,7 @@ CPLErr EMURasterBand::SetMetadataItem(const char *pszName, const char *pszValue,
     }
     else
     {
-        CSLSetNameValue(m_papszMetadataList, pszName, pszValue);
+        m_papszMetadataList = CSLSetNameValue(m_papszMetadataList, pszName, pszValue);
         return CE_None;
     }    
 }
@@ -427,7 +406,7 @@ CPLErr EMURasterBand::SetMetadata(char **papszMetadata, const char *pszDomain)
             }
         }
         
-        CSLSetNameValue(m_papszMetadataList, pszName, pszValue);
+        m_papszMetadataList = CSLSetNameValue(m_papszMetadataList, pszName, pszValue);
         
         nIndex++;
     }
@@ -464,15 +443,54 @@ GDALRasterBand* EMURasterBand::GetOverview(int nOverview)
     }
 }
 
-void EMURasterBand::CreateOverviews(int nOverviews)
+CPLErr EMURasterBand::CreateOverviews(int nOverviews, const int *panOverviewList)
 {
+    if( m_panOverviewBands != nullptr )
+    {
+        CPLError(CE_Failure, CPLE_FileIO,
+            "Can't update overviews once set");
+        return CE_Failure;
+    }
+
     m_panOverviewBands = (EMUBaseBand**)CPLMalloc(sizeof(EMUBaseBand*) * nOverviews);
     m_nOverviews = nOverviews;
 
     // loop through and create the overviews
-    // don't actually need to know their size at all...
+    int nFactor, nXSize, nYSize;
     for( int nCount = 0; nCount < m_nOverviews; nCount++ )
     {
-        m_panOverviewBands[nCount] = new EMUBaseBand(poDS, nBand, eDataType, nCount + 1, m_mutex);
+        nFactor = panOverviewList[nCount];
+        // divide by the factor to get the new size
+        nXSize = this->nRasterXSize / nFactor;
+        nYSize = this->nRasterYSize / nFactor;
+        m_panOverviewBands[nCount] = new EMUBaseBand(cpl::down_cast<EMUDataset*>(poDS), 
+            nBand, eDataType, nCount + 1, nXSize, nYSize, nBlockXSize, m_mutex);
     }
+    
+    return CE_None;
+}
+
+CPLErr EMURasterBand::CreateOverviews(const std::vector<std::pair<int, int> > &sizes)
+{
+    if( m_panOverviewBands != nullptr )
+    {
+        CPLError(CE_Failure, CPLE_FileIO,
+            "Can't update overviews once set");
+        return CE_Failure;
+    }
+
+    m_nOverviews = sizes.size();
+    m_panOverviewBands = (EMUBaseBand**)CPLMalloc(sizeof(EMUBaseBand*) * m_nOverviews);
+
+    // loop through and create the overviews
+    int nCount = 0;
+    for( auto & s : sizes)
+    {
+        m_panOverviewBands[nCount] = new EMUBaseBand(cpl::down_cast<EMUDataset*>(poDS), 
+                nBand, eDataType, nCount + 1, 
+                s.first, s.second, nBlockXSize, m_mutex);
+        nCount++;
+    }    
+
+    return CE_None;
 }

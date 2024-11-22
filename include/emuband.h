@@ -40,20 +40,20 @@
 class EMUBaseBand: public GDALRasterBand
 {
 public:
-    EMUBaseBand(EMUDataset *, int nBandIn, GDALDataType eType, uint64_t nLevel, const std::shared_ptr<std::mutex>& other);
+    EMUBaseBand(EMUDataset *, int nBandIn, GDALDataType eType, uint64_t nLevel, int nXSize, int nYSize, int nBlockSize, const std::shared_ptr<std::mutex>& other);
     ~EMUBaseBand();
 
     virtual CPLErr IReadBlock( int, int, void * ) override;
     virtual CPLErr IWriteBlock( int, int, void * ) override;
-private:
+protected:
     std::shared_ptr<std::mutex> m_mutex;
     uint64_t m_nLevel; 
-}
+};
 
 class EMURasterBand final: public EMUBaseBand
 {
 public:
-    EMURasterBand(EMUDataset *, int nBandIn, GDALDataType eType, bool bThematic, const std::shared_ptr<std::mutex>& other);
+    EMURasterBand(EMUDataset *, int nBandIn, GDALDataType eType, bool bThematic, int nXSize, int nYSize, int nBlockSize, const std::shared_ptr<std::mutex>& other);
     ~EMURasterBand();
 
     virtual double GetNoDataValue(int *pbSuccess = nullptr) override;
@@ -85,7 +85,8 @@ public:
     GDALRasterBand* GetOverview(int nOverview) override;
 
     // non virtual function to create the objects
-    void CreateOverviews(int nOverviews);
+    CPLErr CreateOverviews(int nOverviews, const int *panOverviewList);
+    CPLErr CreateOverviews(const std::vector<std::pair<int, int> > &sizes);
 
     bool GetThematic() { return m_bThematic;};
    

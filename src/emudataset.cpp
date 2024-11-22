@@ -31,6 +31,7 @@
 #include "emudataset.h"
 #include "emuband.h"
 
+const int DFLT_TILESIZE = 512; // TODO: allow adjust
 const int S3_MAX_PARTS = 1000;
 const int S3_MIN_PART_SIZE = 50;  // MB - is actually 5, but let's not let it go down that far
 const int S3_MAX_PART_SIZE = 5000;  // MB
@@ -39,7 +40,7 @@ const int S3_MAX_PART_SIZE = 5000;  // MB
 const double AVG_COMPRESSION_RATIO = 0.5;
 const int ONE_MB = 1048576; 
 
-EMUDataset::EMUDataset(VSILFILE *fp, GDALDataType eType, int nXSize, int nYSize, GDALAccess eInAccess)
+EMUDataset::EMUDataset(VSILFILE *fp, GDALDataType eType, int nXSize, int nYSize, GDALAccess eInAccess, bool bCloudOptimised, int nTileSize)
 {
     m_fp = fp;
     for( int i = 0; i < 6; i++ )
@@ -51,9 +52,10 @@ EMUDataset::EMUDataset(VSILFILE *fp, GDALDataType eType, int nXSize, int nYSize,
     nRasterXSize = nXSize;
     nRasterYSize = nYSize; 
     eAccess = eInAccess;
+    m_bCloudOptimised = bCloudOptimised;
     
     // TODO: allow override
-    m_tileSize = 512;
+    m_tileSize = nTileSize;
     
     m_mutex = std::make_shared<std::mutex>();
 }
@@ -99,12 +101,8 @@ CPLErr EMUDataset::Close()
             val = GetRasterYSize();
             VSIFWriteL(&val, sizeof(val), 1, m_fp);
             
-            // number of overviews
-            val = 0;
-            VSIFWriteL(&val, sizeof(val), 1, m_fp);
-            
-            // TODO: info on each overview here
-            
+            VSIFReadL(&m_tileSize, sizeof(m_tileSize), 1, m_fp);
+
             // nodata and stats for each band. 
             for( int n = 0; n < GetRasterCount(); n++ )
             {
@@ -118,14 +116,26 @@ CPLErr EMUDataset::Close()
                 uint8_t nThematic = pBand->GetThematic();
                 VSIFWriteL(&nThematic, sizeof(nThematic), 1, m_fp);
                 
-                pBand->EstimateStatsFromHistogram();
-                
                 VSIFWriteL(&pBand->m_dMin, sizeof(pBand->m_dMin), 1, m_fp);
                 VSIFWriteL(&pBand->m_dMax, sizeof(pBand->m_dMax), 1, m_fp);
                 VSIFWriteL(&pBand->m_dMean, sizeof(pBand->m_dMean), 1, m_fp);
                 VSIFWriteL(&pBand->m_dStdDev, sizeof(pBand->m_dStdDev), 1, m_fp);
-                VSIFWriteL(&pBand->m_dMedian, sizeof(pBand->m_dMedian), 1, m_fp);
-                VSIFWriteL(&pBand->m_dMode, sizeof(pBand->m_dMode), 1, m_fp);
+                
+                // overviews
+                uint32_t noverviews = pBand->GetOverviewCount();
+                VSIFWriteL(&pBand->m_dMin, sizeof(pBand->m_dMin), 1, m_fp);
+                for( uint32_t n = 0; n < noverviews; n++)
+                {
+                    GDALRasterBand *pOv = pBand->GetOverview(n);
+                    val = pOv->GetXSize();
+                    VSIFWriteL(&val, sizeof(val), 1, m_fp);
+                    val = pOv->GetYSize();
+                    VSIFWriteL(&val, sizeof(val), 1, m_fp);
+                }
+
+                // TODO: metadata
+                
+
             }
             
             // tilesize
@@ -195,7 +205,11 @@ CPLErr EMUDataset::IBuildOverviews(const char *pszResampling, int nOverviews, co
         // get the band
         EMURasterBand *pBand = (EMURasterBand*)this->GetRasterBand(nCurrentBand);
         // create the overview objects
-        pBand->CreateOverviews( nOverviews );
+        CPLErr err = pBand->CreateOverviews( nOverviews, panBandList );
+        if( err != CE_None )
+        {
+            return err;
+        }
     }
     return CE_None;
 }
@@ -225,6 +239,7 @@ GDALDataset *EMUDataset::Open(GDALOpenInfo *poOpenInfo)
     // flags
     uint32_t nFlags;
     memcpy(&nFlags, &poOpenInfo->pabyHeader[3], sizeof(nFlags));
+    bool bCloudOptimised = nFlags & 1; // TODO
     
     // Check that the file pointer from GDALOpenInfo* is available.
     if( poOpenInfo->fpL == nullptr )
@@ -265,15 +280,15 @@ GDALDataset *EMUDataset::Open(GDALOpenInfo *poOpenInfo)
     uint64_t ysize;
     VSIFReadL(&ysize, sizeof(ysize), 1, poOpenInfo->fpL);
 
-    uint64_t nover;
-    VSIFReadL(&nover, sizeof(nover), 1, poOpenInfo->fpL);
+    uint32_t ntilesize;
+    VSIFReadL(&ntilesize, sizeof(ntilesize), 1, poOpenInfo->fpL);
     
     // grap ownership of poOpenInfo->fpL
     VSILFILE *fp = nullptr;
     std::swap(fp, poOpenInfo->fpL);
 
     GDALDataType eType = (GDALDataType)ftype;
-    EMUDataset *pDS = new EMUDataset(fp, eType, xsize, ysize, GA_ReadOnly);
+    EMUDataset *pDS = new EMUDataset(fp, eType, xsize, ysize, GA_ReadOnly, bCloudOptimised, ntilesize);
 
     // nodata and stats for each band. 
     for( int n = 0; n < count; n++ )
@@ -285,7 +300,7 @@ GDALDataset *EMUDataset::Open(GDALOpenInfo *poOpenInfo)
         uint8_t nThematic;
         VSIFReadL(&nThematic, sizeof(nThematic), 1, fp);
 
-        EMURasterBand *pBand = new EMURasterBand(pDS, n + 1, eType, nThematic, pDS->m_mutex);
+        EMURasterBand *pBand = new EMURasterBand(pDS, n + 1, eType, nThematic, xsize, ysize, ntilesize, pDS->m_mutex);
         if(n8NoDataSet)
             pBand->SetNoDataValueAsInt64(nodata);
             
@@ -293,15 +308,27 @@ GDALDataset *EMUDataset::Open(GDALOpenInfo *poOpenInfo)
         VSIFReadL(&pBand->m_dMax, sizeof(pBand->m_dMax), 1, fp);
         VSIFReadL(&pBand->m_dMean, sizeof(pBand->m_dMean), 1, fp);
         VSIFReadL(&pBand->m_dStdDev, sizeof(pBand->m_dStdDev), 1, fp);
-        VSIFReadL(&pBand->m_dMedian, sizeof(pBand->m_dMedian), 1, fp);
-        VSIFReadL(&pBand->m_dMode, sizeof(pBand->m_dMode), 1, fp);
-        pBand->UpdateMetadataList();
         
         pDS->SetBand(n + 1, pBand);
+        
+        uint32_t nOverviews;
+        VSIFReadL(&nOverviews, sizeof(nOverviews), 1, fp);
+        std::vector<std::pair<int, int> > sizes;
+        for( uint32_t n = 0; n < nOverviews; n++)
+        {
+            uint64_t oxsize;
+            VSIFReadL(&oxsize, sizeof(oxsize), 1, fp);
+            uint64_t oysize;
+            VSIFReadL(&oysize, sizeof(oysize), 1, fp);
+            sizes.push_back(std::make_pair<int, int>(xsize, ysize));
+        }
+        pBand->CreateOverviews(sizes);
+        
+
+        // TODO:
+        pBand->UpdateMetadataList();
+
     }
-    
-    uint64_t tilesize;
-    VSIFReadL(&tilesize, sizeof(tilesize), 1, fp);
     
     double transform[6];
     VSIFReadL(transform, sizeof(transform), 1, fp);
@@ -406,16 +433,83 @@ GDALDataset *EMUDataset::Create(const char * pszFilename,
     }
     
     VSIFPrintfL(fp, "EMU%04d", EMU_VERSION);
-    uint32_t nFlags = 0;
-    VSIFWriteL(&nFlags, sizeof(nFlags), 1, m_fp);
+    uint32_t nFlags = 0;  // No COG
+    VSIFWriteL(&nFlags, sizeof(nFlags), 1, fp);
     
-    EMUDataset *pDS = new EMUDataset(fp, eType, nXSize, nYSize, GA_Update);
+    EMUDataset *pDS = new EMUDataset(fp, eType, nXSize, nYSize, GA_Update, false, DFLT_TILESIZE);
     for( int n = 0; n < nBands; n++ )
     {
-        pDS->SetBand(n + 1, new EMURasterBand(pDS, n + 1, eType, false, pDS->m_mutex));
+        pDS->SetBand(n + 1, new EMURasterBand(pDS, n + 1, eType, false, nXSize, nYSize, DFLT_TILESIZE, pDS->m_mutex));
     }
     
     return pDS;
+}
+
+bool CopyBand(GDALRasterBand *pSrc, GDALRasterBand *pDst, int &nDoneBlocks, int nTotalBlocks, int nBlockSize, GDALProgressFunc pfnProgress, void *pProgressData)
+{
+    int nXSize = pSrc->GetXSize();
+    int nYSize = pSrc->GetYSize();
+    GDALDataType eGDALType = pSrc->GetRasterDataType();
+
+    // allocate some space
+    int nPixelSize = GDALGetDataTypeSize( eGDALType ) / 8;
+    void *pData = CPLMalloc( nPixelSize * nBlockSize * nBlockSize);
+    double dLastFraction = -1;
+
+    // go through the image
+    for( unsigned int nY = 0; nY < nYSize; nY += nBlockSize )
+    {
+        // adjust for edge blocks
+        unsigned int nysize = nBlockSize;
+        unsigned int nytotalsize = nY + nBlockSize;
+        if( nytotalsize > nYSize )
+            nysize -= (nytotalsize - nYSize);
+        for( unsigned int nX = 0; nX < nXSize; nX += nBlockSize )
+        {
+            // adjust for edge blocks
+            unsigned int nxsize = nBlockSize;
+            unsigned int nxtotalsize = nX + nBlockSize;
+            if( nxtotalsize > nXSize )
+                nxsize -= (nxtotalsize - nXSize);
+
+            // read in from In Band 
+            if( pSrc->RasterIO( GF_Read, nX, nY, nxsize, nysize, pData, nxsize, nysize, eGDALType, nPixelSize, nPixelSize * nBlockSize) != CE_None )
+            {
+                CPLError( CE_Failure, CPLE_AppDefined, "Unable to read block at %d %d\n", nX, nY );
+                return false;
+            }
+            // write out
+            if( pDst->RasterIO(GF_Write, nX, nY, nxsize, nysize, pData, nxsize, nysize, eGDALType, nPixelSize, nPixelSize * nBlockSize) != CE_None )
+            {
+                CPLError( CE_Failure, CPLE_AppDefined, "Unable to read block at %d %d\n", nX, nY );
+                return false;
+            }
+            
+            // progress
+            nDoneBlocks++;
+            double dFraction = (double)nDoneBlocks / (double)nTotalBlocks;
+            if( dFraction != dLastFraction )
+            {
+                if( !pfnProgress( dFraction, nullptr, pProgressData ) )
+                {
+                    CPLFree( pData );
+                    return false;
+                }
+                dLastFraction = dFraction;
+            }
+        }
+    }
+
+    
+    CPLFree(pData);
+    return true;
+}
+
+int GetBandTotalTiles(GDALRasterBand *pSrc, int nBlockSize)
+{
+    int nXTiles = std::ceil(pSrc->GetXSize() / double(nBlockSize));
+    int nYTiles = std::ceil(pSrc->GetYSize() / double(nBlockSize));
+    return nXTiles * nYTiles; 
 }
 
 GDALDataset *EMUDataset::CreateCopy( const char * pszFilename, GDALDataset *pSrcDs,
@@ -438,32 +532,70 @@ GDALDataset *EMUDataset::CreateCopy( const char * pszFilename, GDALDataset *pSrc
     
     VSIFPrintfL(fp, "EMU%04d", EMU_VERSION);
     uint32_t nFlags = 1;  // COG
-    VSIFWriteL(&nFlags, sizeof(nFlags), 1, m_fp);
+    VSIFWriteL(&nFlags, sizeof(nFlags), 1, fp);
     
-    EMUDataset *pDS = new EMUDataset(fp, eType, nXSize, nYSize, GA_Update);
+    EMUDataset *pDS = new EMUDataset(fp, eType, nXSize, nYSize, GA_Update, true, DFLT_TILESIZE);
     for( int n = 0; n < nBands; n++ )
     {
-        pDS->SetBand(n + 1, new EMURasterBand(pDS, n + 1, eType, false, pDS->m_mutex));
+        pDS->SetBand(n + 1, new EMURasterBand(pDS, n + 1, eType, false, nXSize, nYSize, DFLT_TILESIZE, pDS->m_mutex));
     }
     
     // find the highest overview level
     int nMaxOverview = 0;
+    int nTotalBlocks = 0;
     for( int n = 0; n < nBands; n++ )
     {
-        GDALRasterBand *pBand = pDS->GetBand(n);
-        int nOverviews = pBand->GetOverviewCount();
+        GDALRasterBand *pSrcBand = pSrcDs->GetRasterBand(n + 1);
+        int nOverviews = pSrcBand->GetOverviewCount();
         if( nOverviews > nMaxOverview )
         {
             nMaxOverview = nOverviews;
         }
+        nTotalBlocks += GetBandTotalTiles(pSrcBand, DFLT_TILESIZE);
+        
+        // create the overviews same as the input (could be different lengths for each band, but unlikely)
+        std::vector<std::pair<int, int> > sizes;
+        for( int nOvCount = 0; nOvCount < nOverviews; nOvCount++)
+        {
+            GDALRasterBand *pOv = pSrcBand->GetOverview(nOvCount);
+            sizes.push_back(std::make_pair<int, int>(pOv->GetXSize(), pOv->GetYSize()));
+            nTotalBlocks += GetBandTotalTiles(pOv, DFLT_TILESIZE);
+        }
+        
+        EMURasterBand *pDestBand = cpl::down_cast<EMURasterBand*>(pDS->GetRasterBand(n + 1));
+        pDestBand->CreateOverviews(sizes);
     }
     
-    // now go through each level and then do each band
-    for( int nOverviewLevel = nMaxOverview; nOverviewLevel > 0; nOverviewLevel--)
+    // now go through each level,  and then do each band
+    int nDoneBlocks = 0;
+    for( int nOverviewLevel = nMaxOverview; nOverviewLevel >= 0; nOverviewLevel--)
     {
+        // TODO: should we be doing the first tile here, for all bands, then second tile for all bands??
         for( int nBand = 0; nBand < nBands; nBand++ )
         {
-            
+            GDALRasterBand *pSrcBand = pSrcDs->GetRasterBand(nBand + 1);
+            if( pSrcBand->GetOverviewCount() >= nOverviewLevel)
+            {
+                GDALRasterBand *pDestBand = pDS->GetRasterBand(nBand + 1);
+                EMUBaseBand *DestOv = cpl::down_cast<EMUBaseBand*>(pDestBand->GetOverview(nOverviewLevel));
+                if(! CopyBand(pSrcBand, DestOv, nDoneBlocks, nTotalBlocks, DFLT_TILESIZE, pfnProgress, pProgressData) )
+                {
+                    delete pDS;
+                    return nullptr;
+                }
+            }
+        }
+    }
+    
+    // now just do the band data last
+    for( int nBand = 0; nBand < nBands; nBand++ )
+    {
+        GDALRasterBand *pSrcBand = pSrcDs->GetRasterBand(nBand + 1);
+        GDALRasterBand *pDestBand = pDS->GetRasterBand(nBand + 1);
+        if(! CopyBand(pSrcBand, pDestBand, nDoneBlocks, nTotalBlocks, DFLT_TILESIZE, pfnProgress, pProgressData) )
+        {
+            delete pDS;
+            return nullptr;
         }
     }
         
