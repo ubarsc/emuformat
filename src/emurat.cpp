@@ -613,14 +613,7 @@ CPLErr EMURat::SetTableType(const GDALRATTableType eInTableType)
 
 GDALRATTableType EMURat::GetTableType() const
 {
-    if(m_pEMUBand->GetThematic())
-    {
-        return GRTT_THEMATIC;
-    }
-    else
-    {
-        return GRTT_ATHEMATIC;
-    }
+    return GRTT_THEMATIC;
 }
 
 void EMURat::RemoveStatistics()

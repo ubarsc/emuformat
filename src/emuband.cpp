@@ -44,6 +44,7 @@ EMUBaseBand::EMUBaseBand(EMUDataset *pDataset, int nBandIn, GDALDataType eType,
     eDataType = eType;
     nRasterXSize = nXSize;
     nRasterYSize = nYSize;
+    eAccess = pDataset->GetAccess();
     m_nLevel = nLevel;    
     m_mutex = other;
 }
@@ -191,13 +192,12 @@ CPLErr EMUBaseBand::IWriteBlock(int nBlockXOff, int nBlockYOff, void *pData)
 }
 
 EMURasterBand::EMURasterBand(EMUDataset *pDataset, int nBandIn, GDALDataType eType, 
-        bool bThematic, int nXSize, int nYSize, int nBlockSize, const std::shared_ptr<std::mutex>& other)
+        int nXSize, int nYSize, int nBlockSize, const std::shared_ptr<std::mutex>& other)
     : EMUBaseBand(pDataset, nBandIn, eType, 0, nXSize, nYSize, nBlockSize, other),
         m_rat(pDataset, this, other)
 {
     m_bNoDataSet = false;
     m_nNoData = 0;
-    m_bThematic = bThematic;
 
     m_dMin = std::numeric_limits<double>::quiet_NaN();
     m_dMax = std::numeric_limits<double>::quiet_NaN();
@@ -304,15 +304,6 @@ CPLErr EMURasterBand::SetStatistics(double dfMin, double dfMax, double dfMean,
 
 void EMURasterBand::UpdateMetadataList()
 {
-    if( m_bThematic )
-    {
-        m_papszMetadataList = CSLSetNameValue(m_papszMetadataList, "LAYER_TYPE", "thematic" );        
-    }
-    else
-    {
-        m_papszMetadataList = CSLSetNameValue(m_papszMetadataList, "LAYER_TYPE", "athematic" );        
-    }
-    
     CPLString osWorkingResult;
     osWorkingResult.Printf( "%f", m_dMin);
     m_papszMetadataList = CSLSetNameValue(m_papszMetadataList, "STATISTICS_MINIMUM", osWorkingResult);
@@ -339,24 +330,8 @@ CPLErr EMURasterBand::SetMetadataItem(const char *pszName, const char *pszValue,
         return CE_Failure;
     }
 
-    if( EQUAL( pszName, "LAYER_TYPE" ) )
-    {
-        if( EQUAL( pszValue, "athematic" ) )
-        {
-            m_bThematic = false;
-        }
-        else
-        {
-            m_bThematic = true;
-        }
-        UpdateMetadataList();
-        return CE_None;
-    }
-    else
-    {
-        m_papszMetadataList = CSLSetNameValue(m_papszMetadataList, pszName, pszValue);
-        return CE_None;
-    }    
+    m_papszMetadataList = CSLSetNameValue(m_papszMetadataList, pszName, pszValue);
+    return CE_None;
 }
 
 const char *EMURasterBand::GetMetadataItem(const char *pszName, const char *pszDomain)
@@ -393,19 +368,6 @@ CPLErr EMURasterBand::SetMetadata(char **papszMetadata, const char *pszDomain)
     {
         pszValue = CPLParseNameValue( papszMetadata[nIndex], &pszName );
 
-        // it is LAYER_TYPE?
-        if( EQUAL( pszName, "LAYER_TYPE" ) )
-        {
-            if( EQUAL( pszValue, "athematic" ) )
-            {
-                m_bThematic = false;
-            }
-            else
-            {
-                m_bThematic = true;
-            }
-        }
-        
         m_papszMetadataList = CSLSetNameValue(m_papszMetadataList, pszName, pszValue);
         
         nIndex++;

@@ -53,7 +53,7 @@ protected:
 class EMURasterBand final: public EMUBaseBand
 {
 public:
-    EMURasterBand(EMUDataset *, int nBandIn, GDALDataType eType, bool bThematic, int nXSize, int nYSize, int nBlockSize, const std::shared_ptr<std::mutex>& other);
+    EMURasterBand(EMUDataset *, int nBandIn, GDALDataType eType, int nXSize, int nYSize, int nBlockSize, const std::shared_ptr<std::mutex>& other);
     ~EMURasterBand();
 
     virtual double GetNoDataValue(int *pbSuccess = nullptr) override;
@@ -88,8 +88,6 @@ public:
     CPLErr CreateOverviews(int nOverviews, const int *panOverviewList);
     CPLErr CreateOverviews(const std::vector<std::pair<int, int> > &sizes);
 
-    bool GetThematic() { return m_bThematic;};
-   
 private:
 
     void UpdateMetadataList();
@@ -97,7 +95,6 @@ private:
 
     bool m_bNoDataSet;
     int64_t m_nNoData;
-    bool m_bThematic;
     char               **m_papszMetadataList; // CPLStringList of metadata
     
     double m_dMin;
