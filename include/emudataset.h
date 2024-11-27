@@ -31,16 +31,13 @@
 #ifndef EMUDATASET_H
 #define EMUDATASET_H
 
+#include <cinttypes>
+
 #include "gdal_priv.h"
 
 #include <mutex>
 #include <thread>
 #include <unordered_map>
-
-
-#if (GDAL_VERSION_MAJOR > 3) || ((GDAL_VERSION_MAJOR == 3) && (GDAL_VERSION_MINOR >= 7))
-    #define HAVE_RFC91
-#endif
 
 const int EMU_VERSION = 1;
 
@@ -99,11 +96,15 @@ public:
     CPLErr SetGeoTransform( double * padfTransform ) override;
     const OGRSpatialReference* GetSpatialRef() const override;
     CPLErr SetSpatialRef(const OGRSpatialReference*) override;
-#ifdef HAVE_RFC91
     CPLErr Close() override;
-#else
-    CPLErr Close();
-#endif
+
+	virtual CPLErr SetMetadataItem(const char *pszName, const char *pszValue, 
+	   const char *pszDomain="") override;
+    virtual const char *GetMetadataItem (const char *pszName, 
+        const char *pszDomain="") override;
+    virtual char** GetMetadata(const char *pszDomain="") override;
+    virtual CPLErr SetMetadata(char **papszMetadata, const char *pszDomain="") override;
+
     
 protected:
     virtual CPLErr IBuildOverviews(const char *pszResampling, int nOverviews, const int *panOverviewList, 
@@ -119,6 +120,8 @@ private:
                                 GDALDataType eType);
 
 
+    void UpdateMetadataList();
+
     VSILFILE  *m_fp = nullptr;
     OGRSpatialReference m_oSRS{};
     std::unordered_map<EMUTileKey, EMUTileValue> m_tileOffsets;
@@ -127,6 +130,7 @@ private:
     std::shared_ptr<std::mutex> m_mutex;
     GDALDataType m_eType;
     bool m_bCloudOptimised;
+    char               **m_papszMetadataList; // CPLStringList of metadata
     
     friend class EMUBaseBand;
     friend class EMURat;

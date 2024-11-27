@@ -40,4 +40,7 @@ const uint8_t COMPRESSION_ZLIB = 1;
 Bytef* doCompression(int type, Bytef *pInput, size_t inputSize, size_t *pnOutputSize, bool *pbFree); 
 void doUncompression(uint8_t type, Bytef *pInput, size_t inputSize, Bytef *pOutput, size_t pnOutputSize);
 
+Bytef* doCompressMetadata(int type, char **papszMetadataList, size_t *pnInputSize, size_t *pnOutputSize);
+char** doUncompressMetadata(uint8_t type, Bytef *pInput, size_t inputSize, size_t pnOutputSize);
+
 #endif //EMUCOMPRESS_H

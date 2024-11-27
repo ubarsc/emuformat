@@ -51,7 +51,7 @@ EMUBaseBand::EMUBaseBand(EMUDataset *pDataset, int nBandIn, GDALDataType eType,
 
 EMUBaseBand::~EMUBaseBand()
 {
-    
+    FlushCache();
 }
 
 CPLErr EMUBaseBand::IReadBlock(int nBlockXOff, int nBlockYOff, void *pData)
@@ -221,6 +221,7 @@ EMURasterBand::~EMURasterBand()
     CPLFree(m_panOverviewBands);
 
     CSLDestroy(m_papszMetadataList);
+    // FlushCache happens in ~EMUBaseBand
 }
 
 double EMURasterBand::GetNoDataValue(int *pbSuccess/* = nullptr*/)
@@ -323,14 +324,37 @@ void EMURasterBand::UpdateMetadataList()
 CPLErr EMURasterBand::SetMetadataItem(const char *pszName, const char *pszValue, 
 	   const char *pszDomain)
 {
-    if(poDS->GetAccess() != GA_Update)
+
+    bool bUpdateNeeded = false;
+    if(EQUAL(pszName, "STATISTICS_MINIMUM"))
     {
-        CPLError(CE_Failure, CPLE_NotSupported,
-             "The EMU driver only supports setting metadata on creation");
-        return CE_Failure;
+        m_dMin = atof(pszValue);
+        bUpdateNeeded = true;
+    }
+    else if(EQUAL(pszName, "STATISTICS_MAXIMUM"))
+    {
+        m_dMax = atof(pszValue);
+        bUpdateNeeded = true;
+    }
+    else if(EQUAL(pszName, "STATISTICS_MEAN"))
+    {
+        m_dMean = atof(pszValue);
+        bUpdateNeeded = true;
+    }
+    else if(EQUAL(pszName, "STATISTICS_STDDEV"))
+    {
+        m_dStdDev = atof(pszValue);
+        bUpdateNeeded = true;
+    }
+    else
+    {
+        m_papszMetadataList = CSLSetNameValue(m_papszMetadataList, pszName, pszValue);
     }
 
-    m_papszMetadataList = CSLSetNameValue(m_papszMetadataList, pszName, pszValue);
+    if(bUpdateNeeded)
+    {
+        UpdateMetadataList();
+    }
     return CE_None;
 }
 
@@ -368,7 +392,7 @@ CPLErr EMURasterBand::SetMetadata(char **papszMetadata, const char *pszDomain)
     {
         pszValue = CPLParseNameValue( papszMetadata[nIndex], &pszName );
 
-        m_papszMetadataList = CSLSetNameValue(m_papszMetadataList, pszName, pszValue);
+        SetMetadataItem(pszName, pszValue, pszDomain);
         
         nIndex++;
     }

@@ -100,3 +100,75 @@ void doUncompression(uint8_t type, Bytef *pInput, size_t inputSize, Bytef *pOutp
     }
 
 }
+
+Bytef* doCompressMetadata(int type, char **papszMetadataList, size_t *pnInputSize, size_t *pnOutputSize)
+{
+    size_t nInputSize = 0;
+    int nIndex = 0;
+    while( papszMetadataList[nIndex] != nullptr )
+    {
+        nInputSize += (strlen(papszMetadataList[nIndex]) + 1);
+        nIndex++;
+    }
+    
+    // another one for the double null at the end
+    nInputSize++;
+    
+    char *pData = static_cast<char*>(CPLMalloc(nInputSize));
+    char *pPos = pData;
+    nIndex = 0;
+    while( papszMetadataList[nIndex] != nullptr )
+    {
+        fprintf(stderr, "metadata %s\n", papszMetadataList[nIndex]);
+        pPos = stpcpy(pPos, papszMetadataList[nIndex]);
+        pPos++;
+        nIndex++;
+    }
+    *pPos = '\0';
+    
+    for( int i = 0; i < nInputSize; i++)
+    {
+        fprintf(stderr, "%c,", pData[i]);
+    }
+    fprintf(stderr, "\n");
+    
+    bool bFree;
+    Bytef *pResult = doCompression(type, reinterpret_cast<Bytef*>(pData), nInputSize, pnOutputSize, &bFree);
+    *pnInputSize = nInputSize;
+
+    for( int i = 0; i < nInputSize; i++)
+    {
+        fprintf(stderr, "%c,", pResult[i]);
+    }
+    fprintf(stderr, "\n");
+    
+    if( bFree )
+    {
+        CPLFree(pData);
+    }
+    return pResult;
+}
+
+char** doUncompressMetadata(uint8_t type, Bytef *pInput, size_t inputSize, size_t pnOutputSize)
+{
+    char **pszResult = nullptr;
+    
+    // first uncompress into a buffer
+    char *pData = static_cast<char*>(CPLMalloc(pnOutputSize));
+    doUncompression(type, pInput, inputSize, reinterpret_cast<Bytef*>(pData), pnOutputSize);
+    
+    // convert into a string array
+    char *pPos = pData;
+    while( *pPos != '\0')
+    {
+        fprintf(stderr, "pPos = %s\n", pPos);
+        char *pNextPos = pPos + strlen(pPos) + 1;
+        char *pEqualPos = strchr(pPos, '=');
+        *pEqualPos = '\0';
+        pszResult = CSLSetNameValue(pszResult, pPos, pEqualPos + 1);
+        pPos = pNextPos;
+    }
+    
+    CPLFree(pData);
+    return pszResult;
+}

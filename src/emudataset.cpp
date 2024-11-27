@@ -30,8 +30,7 @@
 
 #include "emudataset.h"
 #include "emuband.h"
-
-#include <cinttypes>
+#include "emucompress.h"
 
 const int DFLT_TILESIZE = 512; // TODO: allow adjust
 const int S3_MAX_PARTS = 1000;
@@ -78,7 +77,10 @@ EMUDataset::EMUDataset(VSILFILE *fp, GDALDataType eType, int nXSize, int nYSize,
     m_bCloudOptimised = bCloudOptimised;
     
     m_tileSize = nTileSize;
-    
+
+    m_papszMetadataList = nullptr;
+    UpdateMetadataList();
+        
     m_mutex = std::make_shared<std::mutex>();
 }
 
@@ -93,17 +95,11 @@ CPLErr EMUDataset::Close()
 
     CPLErr eErr = CE_None;
     if( 
-#ifdef HAVE_RFC91
         (nOpenFlags != OPEN_FLAGS_CLOSED ) && 
-#endif
         (eAccess == GA_Update) )
     {
-#ifdef HAVE_RFC91
         if( FlushCache(true) != CE_None )
             eErr = CE_Failure;
-#else
-        FlushCache();
-#endif
         if( m_fp )  
         {
             // now write header
@@ -153,7 +149,29 @@ CPLErr EMUDataset::Close()
                     VSIFWriteL(&val, sizeof(val), 1, m_fp);
                 }
 
-                // TODO: metadata
+                // metadata
+                char **ppszMetadata = pBand->GetMetadata();
+                if(ppszMetadata != nullptr)
+                {
+                    size_t nOutputSize, nInputSize;
+                    Bytef *pCompressed = doCompressMetadata(COMPRESSION_NONE, ppszMetadata, &nInputSize, &nOutputSize);
+                    val = nInputSize;
+                    VSIFWriteL(&val, sizeof(val), 1, m_fp);
+                    val = nOutputSize;
+                    VSIFWriteL(&val, sizeof(val), 1, m_fp);
+                    fprintf(stderr, "write\n");
+                    for( int i = 0; i < nOutputSize; i++)
+                    {
+                        fprintf(stderr, "%c,", pCompressed[i]);
+                    }
+                    fprintf(stderr, "\n");
+                    VSIFWriteL(pCompressed, nOutputSize, 1, m_fp);
+                }
+                else
+                {
+                    val = 0;
+                    VSIFWriteL(&val, sizeof(val), 1, m_fp);
+                }
                 
 
             }
@@ -175,6 +193,25 @@ CPLErr EMUDataset::Close()
             if( bFree )
             {
                 CPLFree(pszWKT);
+            }
+            
+            // metadata (dataset)
+            char **ppszMetadata = GetMetadata();
+            if(ppszMetadata != nullptr)
+            {
+                size_t nOutputSize, nInputSize;
+                Bytef *pCompressed = doCompressMetadata(COMPRESSION_NONE, ppszMetadata, &nInputSize, &nOutputSize);
+                val = nInputSize;
+                VSIFWriteL(&val, sizeof(val), 1, m_fp);
+                val = nOutputSize;
+                VSIFWriteL(&val, sizeof(val), 1, m_fp);
+                VSIFWriteL(pCompressed, nOutputSize, 1, m_fp);
+                CPLFree(pCompressed);
+            }
+            else
+            {
+                val = 0;
+                VSIFWriteL(&val, sizeof(val), 1, m_fp);
             }
             
             // number of tile offsets
@@ -364,10 +401,31 @@ GDALDataset *EMUDataset::Open(GDALOpenInfo *poOpenInfo)
         }
         pBand->CreateOverviews(sizes);
         
-
-        // TODO:
-        pBand->UpdateMetadataList();
-
+        // metadata
+        uint64_t nOutputSize;
+        VSIFReadL(&nOutputSize, sizeof(nOutputSize), 1, fp);
+        EMU_U64(nOutputSize)
+        if( nOutputSize >  0)
+        {
+            uint64_t nInputSize;
+            VSIFReadL(&nInputSize, sizeof(nInputSize), 1, fp);
+            EMU_U64(nInputSize)
+            Byte *pBuf = static_cast<Bytef*>(CPLMalloc(nInputSize));
+            VSIFReadL(pBuf, nInputSize, 1, fp);
+            for( int i = 0; i < nInputSize; i++)
+            {
+                fprintf(stderr, "%c,", pBuf[i]);
+            }
+            fprintf(stderr, "\n");
+            
+            char **ppszMetadata = doUncompressMetadata(COMPRESSION_NONE, pBuf, nInputSize, nOutputSize);
+            pBand->SetMetadata(ppszMetadata);
+            CSLDestroy(ppszMetadata);
+            CPLFree(pBuf);
+            
+            // ensure all in sync
+            pBand->UpdateMetadataList();
+        }
     }
 
     double transform[6];
@@ -390,6 +448,26 @@ GDALDataset *EMUDataset::Open(GDALOpenInfo *poOpenInfo)
     OGRSpatialReference sr(pszWKT);
     pDS->SetSpatialRef(&sr);
     delete[] pszWKT;
+    
+    // metadata
+    uint64_t val;
+    VSIFReadL(&val, sizeof(val), 1, fp);
+    if( val >  0)
+    {
+        size_t nOutputSize = val, nInputSize;
+        VSIFReadL(&val, sizeof(val), 1, fp);
+        nInputSize = val;
+        Byte *pBuf = static_cast<Bytef*>(CPLMalloc(nInputSize));
+        VSIFReadL(pBuf, nInputSize, 1, fp);
+        
+        char **ppszMetadata = doUncompressMetadata(COMPRESSION_NONE, pBuf, nInputSize, nOutputSize);
+        pDS->SetMetadata(ppszMetadata);
+        CSLDestroy(ppszMetadata);
+        CPLFree(pBuf);
+        
+        // ensure all in sync
+        pDS->UpdateMetadataList();
+    }
     
     uint64_t ntiles;
     VSIFReadL(&ntiles, sizeof(ntiles), 1, fp);
@@ -648,13 +726,23 @@ GDALDataset *EMUDataset::CreateCopy( const char * pszFilename, GDALDataset *pSrc
     for( int nBand = 0; nBand < nBands; nBand++ )
     {
         GDALRasterBand *pSrcBand = pSrcDs->GetRasterBand(nBand + 1);
-        GDALRasterBand *pDestBand = pDS->GetRasterBand(nBand + 1);
+        EMURasterBand *pDestBand = cpl::down_cast<EMURasterBand*>(pDS->GetRasterBand(nBand + 1));
         if(! CopyBand(pSrcBand, pDestBand, nDoneBlocks, nTotalBlocks, DFLT_TILESIZE, pfnProgress, pProgressData) )
         {
             delete pDS;
             return nullptr;
         }
+        
+        // metadata
+        char **ppsz = pSrcBand->GetMetadata();
+        pDestBand->SetMetadata(ppsz);
+        pDestBand->UpdateMetadataList();
     }
+    
+    // metadata
+    char **ppsz = pSrcDs->GetMetadata();
+    pDS->SetMetadata(ppsz);
+    pDS->UpdateMetadataList();
         
     return pDS;
 }
@@ -688,6 +776,71 @@ const OGRSpatialReference* EMUDataset::GetSpatialRef() const
 CPLErr EMUDataset::SetSpatialRef(const OGRSpatialReference* poSRS)
 {
     m_oSRS = *poSRS;
+    return CE_None;
+}
+
+void EMUDataset::UpdateMetadataList()
+{
+    if( m_bCloudOptimised )
+    {
+        m_papszMetadataList = CSLSetNameValue(m_papszMetadataList, "CLOUD_OPTIMISED", "TRUE");
+    }
+    else
+    {
+        m_papszMetadataList = CSLSetNameValue(m_papszMetadataList, "CLOUD_OPTIMISED", "FALSE");
+    }
+}
+
+CPLErr EMUDataset::SetMetadataItem(const char *pszName, const char *pszValue, 
+	   const char *pszDomain)
+{
+
+    // can't update CLOUD_OPTIMISED
+    if(!EQUAL(pszName, "CLOUD_OPTIMISED"))
+    {
+        m_papszMetadataList = CSLSetNameValue(m_papszMetadataList, pszName, pszValue);
+    }
+    return CE_None;
+}
+
+const char *EMUDataset::GetMetadataItem(const char *pszName, const char *pszDomain)
+{
+    // only deal with 'default' domain - no geolocation etc
+    if( ( pszDomain != nullptr ) && ( *pszDomain != '\0' ) )
+        return nullptr;
+    // get it out of the CSLStringList so we can be sure it is persistant
+    return CSLFetchNameValue(m_papszMetadataList, pszName);
+}
+
+// get all the metadata as a CSLStringList - not thread safe
+char **EMUDataset::GetMetadata(const char *pszDomain)
+{
+    // only deal with 'default' domain - no geolocation etc
+    if( ( pszDomain != nullptr ) && ( *pszDomain != '\0' ) )
+        return nullptr;
+
+    // conveniently we already have it in this format
+    return m_papszMetadataList; 
+}
+
+// set the metadata as a CSLStringList
+CPLErr EMUDataset::SetMetadata(char **papszMetadata, const char *pszDomain)
+{
+    // only deal with 'default' domain - no geolocation etc
+    if( ( pszDomain != nullptr ) && ( *pszDomain != '\0' ) )
+        return CE_Failure;
+    int nIndex = 0;
+    char *pszName;
+    const char *pszValue;
+    // iterate through each one
+    while( papszMetadata[nIndex] != nullptr )
+    {
+        pszValue = CPLParseNameValue( papszMetadata[nIndex], &pszName );
+        
+        SetMetadataItem(pszName, pszValue, pszDomain);
+        
+        nIndex++;
+    }
     return CE_None;
 }
 

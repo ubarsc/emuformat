@@ -71,11 +71,11 @@ public:
 	    double dfStdDev) override;
 	    
 	virtual CPLErr SetMetadataItem(const char *pszName, const char *pszValue, 
-	   const char *pszDomain) override;
+	   const char *pszDomain="") override;
     virtual const char *GetMetadataItem (const char *pszName, 
-        const char *pszDomain) override;
-    virtual char** GetMetadata(const char *pszDomain) override;
-    virtual CPLErr SetMetadata(char **papszMetadata, const char *pszDomain) override;
+        const char *pszDomain="") override;
+    virtual char** GetMetadata(const char *pszDomain="") override;
+    virtual CPLErr SetMetadata(char **papszMetadata, const char *pszDomain="") override;
 
     virtual GDALRasterAttributeTable *GetDefaultRAT() override;
     virtual CPLErr SetDefaultRAT(const GDALRasterAttributeTable *poRAT) override;
