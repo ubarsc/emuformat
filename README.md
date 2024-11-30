@@ -9,19 +9,20 @@ using a LaunchTemplate to accomodate other formats that must be written
 locally before copying to S3. Files in EMU format can be written directly to S3
 using the /vsis3 GDAL virtual filesystem.
 
-It is likely too, that EMU will be used as an intermediate formate before 
+It is likely too, that EMU will be used as an intermediate format before 
 being translated into GeoTiff or KEA for distribution. 
 
-It will support overviews (calculated as it goes) and does support
-the calculation of stats as it goes. It will soon support histograms
-and basic Raster Attribute Tables.
 
-It is designed to be written only by RIOS. Other methods may result
-in errors or corruption of data. 
+It is designed to be written by:
 
-Furthermore with RIOS, the blocksize must be set to 512x512 and
-the calculation of stats/pyramid layers must be disabled. See
-the file copyfile.py for more information.
+1. RIOS, in particular version 2.0.5 and above
+with the on-the-fly statistics and pyramid layers enabled (the default). 
+Furthermore with RIOS, the blocksize must be set to 512x512.
+
+2. gdal_translate -of EMU from another GDAL supported format. If available,
+the statistics and pyramid layers will be copied across from the input file.
+
+Other methods may result in errors or corruption of data. 
 
 It doesn't (and will not) support update of files in place. 
 
@@ -46,4 +47,14 @@ A. Dunno
 Q. Are you going to add support for other features not already covered above?
 A. No
 
+Q. How to build?
+A. On Linux conda:
+```
+conda create -n emu cmake cxx-compiler gdal
+mkdir build
+cd build
+cmake -D CMAKE_INSTALL_PREFIX=$CONDA_PREFIX ..
+make
+make install
+```
 

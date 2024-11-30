@@ -46,7 +46,6 @@ def main():
     thematic = info.layerType == 'thematic'
     
     controls = applier.ApplierControls()
-    controls.setCalcStats(False)
     controls.setOutputDriverName('EMU')
     controls.setWindowSize(512, 512)
     controls.setThematic(thematic)
