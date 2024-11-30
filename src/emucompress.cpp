@@ -119,29 +119,16 @@ Bytef* doCompressMetadata(int type, char **papszMetadataList, size_t *pnInputSiz
     nIndex = 0;
     while( papszMetadataList[nIndex] != nullptr )
     {
-        fprintf(stderr, "metadata %s\n", papszMetadataList[nIndex]);
         pPos = stpcpy(pPos, papszMetadataList[nIndex]);
         pPos++;
         nIndex++;
     }
     *pPos = '\0';
     
-    for( int i = 0; i < nInputSize; i++)
-    {
-        fprintf(stderr, "%c,", pData[i]);
-    }
-    fprintf(stderr, "\n");
-    
     bool bFree;
     Bytef *pResult = doCompression(type, reinterpret_cast<Bytef*>(pData), nInputSize, pnOutputSize, &bFree);
     *pnInputSize = nInputSize;
 
-    for( int i = 0; i < nInputSize; i++)
-    {
-        fprintf(stderr, "%c,", pResult[i]);
-    }
-    fprintf(stderr, "\n");
-    
     if( bFree )
     {
         CPLFree(pData);
@@ -161,11 +148,13 @@ char** doUncompressMetadata(uint8_t type, Bytef *pInput, size_t inputSize, size_
     char *pPos = pData;
     while( *pPos != '\0')
     {
-        fprintf(stderr, "pPos = %s\n", pPos);
         char *pNextPos = pPos + strlen(pPos) + 1;
         char *pEqualPos = strchr(pPos, '=');
-        *pEqualPos = '\0';
-        pszResult = CSLSetNameValue(pszResult, pPos, pEqualPos + 1);
+        if( pEqualPos != nullptr)
+        {
+            *pEqualPos = '\0';
+            pszResult = CSLSetNameValue(pszResult, pPos, pEqualPos + 1);
+        }
         pPos = pNextPos;
     }
     
