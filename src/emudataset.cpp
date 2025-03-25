@@ -124,7 +124,6 @@ CPLErr EMUDataset::Close()
                 
             }
 
-
             eErr = FlushCache(true);
             if( eErr != CE_None )
             {
@@ -290,7 +289,7 @@ CPLErr EMUDataset::IBuildOverviews(const char *pszResampling, int nOverviews, co
         // get the band
         EMURasterBand *pBand = (EMURasterBand*)this->GetRasterBand(nCurrentBand);
         // create the overview objects
-        CPLErr err = pBand->CreateOverviews( nOverviews, panBandList );
+        CPLErr err = pBand->CreateOverviews( nOverviews, panOverviewList );
         if( err != CE_None )
         {
             return err;

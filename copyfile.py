@@ -48,7 +48,8 @@ def main():
     controls = applier.ApplierControls()
     controls.setOutputDriverName('EMU')
     controls.setWindowSize(512, 512)
-    controls.setThematic(thematic)
+    controls.setSinglePassPyramids(True)
+    #controls.setThematic(thematic)
     
     applier.apply(copyf, inputs, outputs, controls=controls)
 

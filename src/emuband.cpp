@@ -58,9 +58,16 @@ CPLErr EMUBaseBand::IReadBlock(int nBlockXOff, int nBlockYOff, void *pData)
 {
     if(poDS->GetAccess() == GA_Update)
     {
+        fprintf(stderr, "%d %d \n", m_nLevel, nBlockXSize);
         CPLError(CE_Failure, CPLE_NotSupported,
              "The EMU driver only supports reading when open in readonly mode");
         return CE_Failure;
+        /*int nXValid, nYValid;
+        CPLErr err = GetActualBlockSize(nBlockXOff, nBlockYOff, &nXValid, &nYValid);
+        if( err != CE_None)
+            return err;
+        int typeSize = GDALGetDataTypeSize(eDataType) / 8;
+        memset(pData, 0, nXValid * nYValid * typeSize);*/
     }
 
     const std::lock_guard<std::mutex> lock(*m_mutex);
@@ -139,7 +146,10 @@ CPLErr EMUBaseBand::IWriteBlock(int nBlockXOff, int nBlockYOff, void *pData)
     int nXValid, nYValid;
     CPLErr err = GetActualBlockSize(nBlockXOff, nBlockYOff, &nXValid, &nYValid);
     if( err != CE_None)
+    {
+        fprintf(stderr, "Failed GetActualBlockSize\n");
         return err;
+    }
     
     vsi_l_offset tileOffset = VSIFTellL(poEMUDS->m_fp);
     int typeSize = GDALGetDataTypeSize(eDataType) / 8;
@@ -190,6 +200,38 @@ CPLErr EMUBaseBand::IWriteBlock(int nBlockXOff, int nBlockYOff, void *pData)
 
     return CE_None;
 }
+
+
+CPLErr EMUBaseBand::IRasterIO(GDALRWFlag eRWFlag, int nXOff, int nYOff, int nXSize, int nYSize,
+              void *pData, int nBufXSize, int nBufYSize, GDALDataType eBufType,
+              GSpacing nPixelSpace, GSpacing nLineSpace,
+              GDALRasterIOExtraArg *psExtraArg)
+{
+    if( eRWFlag == GF_Read )
+    {
+        // safe to use the default implementation
+        return GDALRasterBand::IRasterIO(eRWFlag, nXOff, nYOff, nXSize, nYSize, pData, nBufXSize, nBufYSize,
+            eBufType, nPixelSpace, nLineSpace, psExtraArg);
+    }
+    else
+    {
+        // our own implementation that doesn't read
+        if( ((nXOff % nBlockXSize ) > 0) || ((nYOff % nBlockYSize ) > 0 ) )
+        {
+            CPLError(CE_Failure, CPLE_NotSupported,
+                 "The EMU driver only supports writing on block boundaries");
+            return CE_Failure;
+        }
+        else
+        {  
+            int nBlockXOff = nXOff / nBlockXSize;
+            int nBlockYOff = nYOff / nBlockYSize;
+            return IWriteBlock(nBlockXOff, nBlockYOff, pData);
+        }
+    }
+  
+}
+
 
 EMURasterBand::EMURasterBand(EMUDataset *pDataset, int nBandIn, GDALDataType eType, 
         int nXSize, int nYSize, int nBlockSize, const std::shared_ptr<std::mutex>& other)
@@ -442,15 +484,19 @@ CPLErr EMURasterBand::CreateOverviews(int nOverviews, const int *panOverviewList
     m_nOverviews = nOverviews;
 
     // loop through and create the overviews
-    int nFactor, nXSize, nYSize;
+    int nFactor, nXSize, nYSize, nBlockSize;
     for( int nCount = 0; nCount < m_nOverviews; nCount++ )
     {
         nFactor = panOverviewList[nCount];
         // divide by the factor to get the new size
         nXSize = this->nRasterXSize / nFactor;
         nYSize = this->nRasterYSize / nFactor;
+        // note: different from KEA we shrink the blocksize by factor for the overviews
+        // so we don't get partial overview blocks when creating a file with RIOS.
+        // 
+        nBlockSize = this->nBlockXSize / nFactor;
         m_panOverviewBands[nCount] = new EMUBaseBand(cpl::down_cast<EMUDataset*>(poDS), 
-            nBand, eDataType, nCount + 1, nXSize, nYSize, nBlockXSize, m_mutex);
+            nBand, eDataType, nCount + 1, nXSize, nYSize, nBlockSize, m_mutex);
     }
     
     return CE_None;
@@ -472,9 +518,14 @@ CPLErr EMURasterBand::CreateOverviews(const std::vector<std::pair<int, int> > &s
     int nCount = 0;
     for( auto & s : sizes)
     {
+        // note: different from KEA we shrink the blocksize by factor for the overviews
+        // so we don't get partial overview blocks when creating a file with RIOS.
+        //
+        int nFactor = this->nRasterXSize / s.first;
+        int nBlockSize = this->nBlockXSize / nFactor;
         m_panOverviewBands[nCount] = new EMUBaseBand(cpl::down_cast<EMUDataset*>(poDS), 
                 nBand, eDataType, nCount + 1, 
-                s.first, s.second, nBlockXSize, m_mutex);
+                s.first, s.second, nBlockSize, m_mutex);
         nCount++;
     }    
 

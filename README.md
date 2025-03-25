@@ -51,6 +51,7 @@ Q. How to build?
 A. On Linux conda:
 ```
 conda create -n emu cmake cxx-compiler gdal
+conda activate emu
 mkdir build
 cd build
 cmake -D CMAKE_INSTALL_PREFIX=$CONDA_PREFIX ..
