@@ -47,6 +47,7 @@ EMUBaseBand::EMUBaseBand(EMUDataset *pDataset, int nBandIn, GDALDataType eType,
     eAccess = pDataset->GetAccess();
     m_nLevel = nLevel;    
     m_mutex = other;
+    fprintf(stderr, "band %d blocksize %d size %d %d level %d\n", nBandIn, nBlockSize, nXSize, nYSize, nLevel);
 }
 
 EMUBaseBand::~EMUBaseBand()
@@ -62,12 +63,6 @@ CPLErr EMUBaseBand::IReadBlock(int nBlockXOff, int nBlockYOff, void *pData)
         CPLError(CE_Failure, CPLE_NotSupported,
              "The EMU driver only supports reading when open in readonly mode");
         return CE_Failure;
-        /*int nXValid, nYValid;
-        CPLErr err = GetActualBlockSize(nBlockXOff, nBlockYOff, &nXValid, &nYValid);
-        if( err != CE_None)
-            return err;
-        int typeSize = GDALGetDataTypeSize(eDataType) / 8;
-        memset(pData, 0, nXValid * nYValid * typeSize);*/
     }
 
     const std::lock_guard<std::mutex> lock(*m_mutex);
@@ -86,6 +81,7 @@ CPLErr EMUBaseBand::IReadBlock(int nBlockXOff, int nBlockYOff, void *pData)
                 nBlockXOff, nBlockXOff);
         return CE_Failure;
     }
+    
 
     // seek to where this block starts    
     VSIFSeekL(poEMUDS->m_fp, val.offset, SEEK_SET);
@@ -98,6 +94,11 @@ CPLErr EMUBaseBand::IReadBlock(int nBlockXOff, int nBlockYOff, void *pData)
     CPLErr err = GetActualBlockSize(nBlockXOff, nBlockYOff, &nXValid, &nYValid);
     if( err != CE_None)
         return err;
+
+    if( ( nBand == 2) && (m_nLevel == 4) && (nBlockXOff < 3) )
+    {
+        fprintf(stderr, "read %d %d %d %d %d %d %d %d %d\n", nBand, nBlockXSize, nBlockXOff, nBlockYOff, nXValid, nYValid, val.offset, val.size, val.uncompressedSize);
+    }
     
     if( (nXValid != nBlockXSize) || (nYValid != nBlockYSize) ) 
     {
@@ -197,6 +198,10 @@ CPLErr EMUBaseBand::IWriteBlock(int nBlockXOff, int nBlockYOff, void *pData)
     
     // update map
     poEMUDS->setTileOffset(m_nLevel, nBand, nBlockXOff, nBlockYOff, tileOffset, compressedSize, uncompressedSize);
+    if( ( nBand == 2) &&(m_nLevel == 4) && (nBlockXOff < 3) )
+    {
+        fprintf(stderr, "write %d %d %d %d %d %d %d %d %d\n", nBand, nBlockXSize, nBlockXOff, nBlockYOff,nXValid, nYValid, tileOffset, compressedSize, uncompressedSize);
+    }
 
     return CE_None;
 }
@@ -502,7 +507,7 @@ CPLErr EMURasterBand::CreateOverviews(int nOverviews, const int *panOverviewList
     return CE_None;
 }
 
-CPLErr EMURasterBand::CreateOverviews(const std::vector<std::pair<int, int> > &sizes)
+CPLErr EMURasterBand::CreateOverviews(const std::vector<std::tuple<int, int, int> > &sizes)
 {
     if( m_panOverviewBands != nullptr )
     {
@@ -518,14 +523,9 @@ CPLErr EMURasterBand::CreateOverviews(const std::vector<std::pair<int, int> > &s
     int nCount = 0;
     for( auto & s : sizes)
     {
-        // note: different from KEA we shrink the blocksize by factor for the overviews
-        // so we don't get partial overview blocks when creating a file with RIOS.
-        //
-        int nFactor = this->nRasterXSize / s.first;
-        int nBlockSize = this->nBlockXSize / nFactor;
         m_panOverviewBands[nCount] = new EMUBaseBand(cpl::down_cast<EMUDataset*>(poDS), 
                 nBand, eDataType, nCount + 1, 
-                s.first, s.second, nBlockSize, m_mutex);
+                std::get<0>(s), std::get<1>(s), std::get<2>(s), m_mutex);
         nCount++;
     }    
 

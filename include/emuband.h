@@ -91,7 +91,7 @@ public:
 
     // non virtual function to create the objects
     CPLErr CreateOverviews(int nOverviews, const int *panOverviewList);
-    CPLErr CreateOverviews(const std::vector<std::pair<int, int> > &sizes);
+    CPLErr CreateOverviews(const std::vector<std::tuple<int, int, int> > &sizes);
 
 private:
 

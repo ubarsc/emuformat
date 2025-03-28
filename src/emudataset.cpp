@@ -175,6 +175,10 @@ CPLErr EMUDataset::Close()
                     VSIFWriteL(&val, sizeof(val), 1, m_fp);
                     val = pOv->GetYSize();
                     VSIFWriteL(&val, sizeof(val), 1, m_fp);
+                    int nXSize, nYSize;
+                    pOv->GetBlockSize(&nXSize, &nYSize);
+                    uint16_t val16 = nXSize;
+                    VSIFWriteL(&val16, sizeof(val16), 1, m_fp);
                 }
 
                 // metadata
@@ -410,7 +414,7 @@ GDALDataset *EMUDataset::Open(GDALOpenInfo *poOpenInfo)
         uint32_t nOverviews;
         VSIFReadL(&nOverviews, sizeof(nOverviews), 1, fp);
         EMU_U32(nOverviews)
-        std::vector<std::pair<int, int> > sizes;
+        std::vector<std::tuple<int, int, int> > sizes;
         for( uint32_t n = 0; n < nOverviews; n++)
         {
             uint64_t oxsize;
@@ -419,7 +423,10 @@ GDALDataset *EMUDataset::Open(GDALOpenInfo *poOpenInfo)
             uint64_t oysize;
             VSIFReadL(&oysize, sizeof(oysize), 1, fp);
             EMU_U64(oysize)
-            sizes.push_back(std::make_pair<int, int>(oxsize, oysize));
+            uint16_t oblocksize;
+            VSIFReadL(&oblocksize, sizeof(oblocksize), 1, fp);
+            EMU_U16(oblocksize)
+            sizes.push_back(std::tuple<int, int, int>(oxsize, oysize, oblocksize));
         }
         pBand->CreateOverviews(sizes);
         
@@ -709,18 +716,32 @@ GDALDataset *EMUDataset::CreateCopy( const char * pszFilename, GDALDataset *pSrc
         {
             nMaxOverview = nOverviews;
         }
-        nTotalBlocks += GetBandTotalTiles(pSrcBand, DFLT_TILESIZE);
+        int nBlockXsize, nBlockYsize;
+        pSrcBand->GetBlockSize(&nBlockXsize, &nBlockYsize);
+        if( nBlockXsize != nBlockYsize)
+        {
+            CPLError( CE_Failure, CPLE_AppDefined, "Block sizes must be square\n");
+            return nullptr;
+        }
+        
+        nTotalBlocks += GetBandTotalTiles(pSrcBand, nBlockXsize);
         
         // create the overviews same as the input (could be different lengths for each band, but unlikely)
-        std::vector<std::pair<int, int> > sizes;
+        std::vector<std::tuple<int, int, int> > sizes;
         for( int nOvCount = 0; nOvCount < nOverviews; nOvCount++)
         {
             GDALRasterBand *pOv = pSrcBand->GetOverview(nOvCount);
-            sizes.push_back(std::make_pair<int, int>(pOv->GetXSize(), pOv->GetYSize()));
-            nTotalBlocks += GetBandTotalTiles(pOv, DFLT_TILESIZE);
-            
+
             int nOvBlockXsize, nOvBlockYsize;
             pOv->GetBlockSize(&nOvBlockXsize, &nOvBlockYsize);
+            if( nOvBlockXsize != nOvBlockYsize)
+            {
+                CPLError( CE_Failure, CPLE_AppDefined, "Block sizes must be square\n");
+                return nullptr;
+            }
+
+            sizes.push_back(std::tuple<int, int, int>(pOv->GetXSize(), pOv->GetYSize(), nOvBlockXsize));
+            nTotalBlocks += GetBandTotalTiles(pOv, nOvBlockXsize);
         }
         
         EMURasterBand *pDestBand = cpl::down_cast<EMURasterBand*>(pDS->GetRasterBand(n + 1));

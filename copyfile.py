@@ -31,6 +31,10 @@
 import sys
 from rios import applier, fileinfo
 
+from osgeo import gdal
+gdal.UseExceptions()
+
+
 def copyf(info, inputs, outputs):
     outputs.outf = inputs.inf
 
