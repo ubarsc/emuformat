@@ -46,10 +46,10 @@ public:
     virtual CPLErr IReadBlock( int, int, void * ) override;
     virtual CPLErr IWriteBlock( int, int, void * ) override;
     // Seems we need to implement this or nothing happens...
-    virtual CPLErr IRasterIO(GDALRWFlag eRWFlag, int nXOff, int nYOff, int nXSize, int nYSize,
+    /*virtual CPLErr IRasterIO(GDALRWFlag eRWFlag, int nXOff, int nYOff, int nXSize, int nYSize,
               void *pData, int nBufXSize, int nBufYSize, GDALDataType eBufType,
               GSpacing nPixelSpace, GSpacing nLineSpace,
-              GDALRasterIOExtraArg *psExtraArg) override;
+              GDALRasterIOExtraArg *psExtraArg) override;*/
 protected:
     std::shared_ptr<std::mutex> m_mutex;
     uint64_t m_nLevel; 

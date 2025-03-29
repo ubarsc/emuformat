@@ -91,7 +91,7 @@ EMUDataset::~EMUDataset()
 
 CPLErr EMUDataset::Close()
 {
-    const std::lock_guard<std::mutex> lock(*m_mutex);
+    // don't lock here as the IWriteBlock function when called will try to lock again...
 
     CPLErr eErr = CE_None;
     if( 
@@ -129,7 +129,6 @@ CPLErr EMUDataset::Close()
             {
                 return eErr;
             }
-            
             // now write header
             vsi_l_offset headerOffset = VSIFTellL(m_fp);
             VSIFWriteL("HDR", 4, 1, m_fp);

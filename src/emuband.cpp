@@ -47,7 +47,6 @@ EMUBaseBand::EMUBaseBand(EMUDataset *pDataset, int nBandIn, GDALDataType eType,
     eAccess = pDataset->GetAccess();
     m_nLevel = nLevel;    
     m_mutex = other;
-    fprintf(stderr, "band %d blocksize %d size %d %d level %d\n", nBandIn, nBlockSize, nXSize, nYSize, nLevel);
 }
 
 EMUBaseBand::~EMUBaseBand()
@@ -59,7 +58,6 @@ CPLErr EMUBaseBand::IReadBlock(int nBlockXOff, int nBlockYOff, void *pData)
 {
     if(poDS->GetAccess() == GA_Update)
     {
-        fprintf(stderr, "%d %d \n", m_nLevel, nBlockXSize);
         CPLError(CE_Failure, CPLE_NotSupported,
              "The EMU driver only supports reading when open in readonly mode");
         return CE_Failure;
@@ -95,11 +93,6 @@ CPLErr EMUBaseBand::IReadBlock(int nBlockXOff, int nBlockYOff, void *pData)
     if( err != CE_None)
         return err;
 
-    if( ( nBand == 2) && (m_nLevel == 4) && (nBlockXOff < 3) )
-    {
-        fprintf(stderr, "read %d %d %d %d %d %d %d %d %d\n", nBand, nBlockXSize, nBlockXOff, nBlockYOff, nXValid, nYValid, val.offset, val.size, val.uncompressedSize);
-    }
-    
     if( (nXValid != nBlockXSize) || (nYValid != nBlockYSize) ) 
     {
         // partial. GDAL expects a full block so let's read the 
@@ -132,7 +125,6 @@ CPLErr EMUBaseBand::IReadBlock(int nBlockXOff, int nBlockYOff, void *pData)
         doUncompression(compression, pSubData, val.size, static_cast<Bytef*>(pData), val.uncompressedSize);
         CPLFree(pSubData);        
     }
-
     return CE_None;
 }
 
@@ -148,7 +140,6 @@ CPLErr EMUBaseBand::IWriteBlock(int nBlockXOff, int nBlockYOff, void *pData)
     CPLErr err = GetActualBlockSize(nBlockXOff, nBlockYOff, &nXValid, &nYValid);
     if( err != CE_None)
     {
-        fprintf(stderr, "Failed GetActualBlockSize\n");
         return err;
     }
     
@@ -195,48 +186,11 @@ CPLErr EMUBaseBand::IWriteBlock(int nBlockXOff, int nBlockYOff, void *pData)
             CPLFree(pCompressed);
         }
     }
-    
     // update map
     poEMUDS->setTileOffset(m_nLevel, nBand, nBlockXOff, nBlockYOff, tileOffset, compressedSize, uncompressedSize);
-    if( ( nBand == 2) &&(m_nLevel == 4) && (nBlockXOff < 3) )
-    {
-        fprintf(stderr, "write %d %d %d %d %d %d %d %d %d\n", nBand, nBlockXSize, nBlockXOff, nBlockYOff,nXValid, nYValid, tileOffset, compressedSize, uncompressedSize);
-    }
-
+    
     return CE_None;
 }
-
-
-CPLErr EMUBaseBand::IRasterIO(GDALRWFlag eRWFlag, int nXOff, int nYOff, int nXSize, int nYSize,
-              void *pData, int nBufXSize, int nBufYSize, GDALDataType eBufType,
-              GSpacing nPixelSpace, GSpacing nLineSpace,
-              GDALRasterIOExtraArg *psExtraArg)
-{
-    if( eRWFlag == GF_Read )
-    {
-        // safe to use the default implementation
-        return GDALRasterBand::IRasterIO(eRWFlag, nXOff, nYOff, nXSize, nYSize, pData, nBufXSize, nBufYSize,
-            eBufType, nPixelSpace, nLineSpace, psExtraArg);
-    }
-    else
-    {
-        // our own implementation that doesn't read
-        if( ((nXOff % nBlockXSize ) > 0) || ((nYOff % nBlockYSize ) > 0 ) )
-        {
-            CPLError(CE_Failure, CPLE_NotSupported,
-                 "The EMU driver only supports writing on block boundaries");
-            return CE_Failure;
-        }
-        else
-        {  
-            int nBlockXOff = nXOff / nBlockXSize;
-            int nBlockYOff = nYOff / nBlockYSize;
-            return IWriteBlock(nBlockXOff, nBlockYOff, pData);
-        }
-    }
-  
-}
-
 
 EMURasterBand::EMURasterBand(EMUDataset *pDataset, int nBandIn, GDALDataType eType, 
         int nXSize, int nYSize, int nBlockSize, const std::shared_ptr<std::mutex>& other)
