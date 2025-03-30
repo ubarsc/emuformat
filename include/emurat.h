@@ -94,10 +94,9 @@ public:
                                 GDALRATFieldType eFieldType, 
                                 GDALRATFieldUsage eFieldUsage ) override;
     void ReadIndex();
+    void WriteIndex();
 
 private:
-
-    void WriteIndex();
 
     EMUDataset *m_pEMUDS;
     EMURasterBand *m_pEMUBand;

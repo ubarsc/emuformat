@@ -226,12 +226,40 @@ CPLErr EMURat::ValuesIO(GDALRWFlag eRWFlag, int iField, int iStartRow, int iLeng
                 iField);
         return CE_Failure;
     }
-    
-    // just do this for now, rather than complex conversions that KEA does
-    if( m_cols[iField].colType != GFT_Real ) 
+
+    // do simple conversions of type
+    if( m_cols[iField].colType == GFT_Integer )
+    {
+        if(eRWFlag == GF_Write)
+        {
+            int *pnData = (int*)CPLMalloc(iLength * sizeof(int));
+            for( int n = 0; n < iLength; n++)
+            {
+                pnData[n] = pdfData[n];
+            }
+            CPLErr err = ValuesIO(eRWFlag, iField, iStartRow, iLength, pnData);
+            CPLFree(pnData);
+            return err;
+        }
+        else
+        {
+            int *pnData = (int*)CPLMalloc(iLength * sizeof(int));
+            CPLErr err = ValuesIO(eRWFlag, iField, iStartRow, iLength, pnData);
+            if( err != CE_None)
+            {
+                for( int n = 0; n < iLength; n++)
+                {
+                    pdfData[n] = pnData[n];
+                }
+            }
+            CPLFree(pnData);
+            return err;
+        }
+    }    
+    else if( m_cols[iField].colType == GFT_String ) 
     {
         CPLError(CE_Failure, CPLE_FileIO,
-                "Wrong type for column %d, expected double.",
+                "Wrong type for column %d, expected number, got string.",
                 iField);
         return CE_Failure;
     }
@@ -306,10 +334,10 @@ CPLErr EMURat::ValuesIO(GDALRWFlag eRWFlag, int iField, int iStartRow, int iLeng
         uint64_t nCopiedRows = 0;
         for( size_t n = 0; n < m_cols[iField].chunks.size(); n++)
         {
-            if(m_cols[iField].chunks[n].startIdx >= iStartRow )
+            if(m_cols[iField].chunks[n].startIdx <= iStartRow )
             {
                 startChunk = n;
-                nElsToSkipAtStart = m_cols[iField].chunks[n].startIdx - iStartRow;
+                nElsToSkipAtStart = iStartRow - m_cols[iField].chunks[n].startIdx;
                 bFound = true;
                 break;
             }
@@ -342,6 +370,7 @@ CPLErr EMURat::ValuesIO(GDALRWFlag eRWFlag, int iField, int iStartRow, int iLeng
                 {
                     pdfData[nCopiedRows] = pData[nElsToSkipAtStart];
                     nCopiedRows++;
+                    nElsToSkipAtStart++;
                 }
                 
                 CPLFree(pSubData);
@@ -378,14 +407,43 @@ CPLErr EMURat::ValuesIO(GDALRWFlag eRWFlag, int iField, int iStartRow, int iLeng
         return CE_Failure;
     }
     
-    // just do this for now, rather than complex conversions that KEA does
-    if( m_cols[iField].colType != GFT_Integer ) 
+    // do simple conversions of type
+    if( m_cols[iField].colType == GFT_Real )
     {
-        CPLError(CE_Failure, CPLE_NotSupported,
-                "Wrong type for column %d, expected double.",
+        if(eRWFlag == GF_Write)
+        {
+            double *pfdData = (double*)CPLMalloc(iLength * sizeof(double));
+            for( int n = 0; n < iLength; n++)
+            {
+                pfdData[n] = pnData[n];
+            }
+            CPLErr err = ValuesIO(eRWFlag, iField, iStartRow, iLength, pfdData);
+            CPLFree(pfdData);
+            return err;
+        }
+        else
+        {
+            double *pfdData = (double*)CPLMalloc(iLength * sizeof(double));
+            CPLErr err = ValuesIO(eRWFlag, iField, iStartRow, iLength, pfdData);
+            if( err != CE_None)
+            {
+                for( int n = 0; n < iLength; n++)
+                {
+                    pnData[n] = pfdData[n];
+                }
+            }
+            CPLFree(pfdData);
+            return err;
+        }
+    }    
+    else if( m_cols[iField].colType == GFT_String ) 
+    {
+        CPLError(CE_Failure, CPLE_FileIO,
+                "Wrong type for column %d, expected number, got string.",
                 iField);
         return CE_Failure;
     }
+
     
     if( iStartRow >= m_nRowCount )
     {
@@ -459,13 +517,71 @@ CPLErr EMURat::ValuesIO(GDALRWFlag eRWFlag, int iField, int iStartRow, int iLeng
     }
     else
     {
+        bool bFound = false;
+        size_t startChunk = 0;
+        uint64_t nElsToSkipAtStart = 0;
         uint64_t nCopiedRows = 0;
-        while(nCopiedRows < iLength)
+        for( size_t n = 0; n < m_cols[iField].chunks.size(); n++)
         {
-            pnData[nCopiedRows] = 23;
-            nCopiedRows++;
+            if(m_cols[iField].chunks[n].startIdx <= iStartRow )
+            {
+                startChunk = n;
+                nElsToSkipAtStart = iStartRow - m_cols[iField].chunks[n].startIdx;
+                bFound = true;
+                break;
+            }
         }
+        
+        if( bFound )
+        {
+            while( (nCopiedRows <  iLength) && (startChunk < m_cols[iField].chunks.size()) )
+            {
+                // seek to where this block starts    
+                VSIFSeekL(m_pEMUDS->m_fp, m_cols[iField].chunks[startChunk].offset, SEEK_SET);
+    
+                // read compression type
+                uint8_t compression;
+                VSIFReadL(&compression, sizeof(compression), 1, m_pEMUDS->m_fp);
+    
+                // read the uncompressed data
+                Bytef *pSubData = static_cast<Bytef*>(CPLMalloc(m_cols[iField].chunks[startChunk].compressedSize));
+                VSIFReadL(pSubData, m_cols[iField].chunks[startChunk].compressedSize, 1, m_pEMUDS->m_fp);
+                
+                uint64_t uncompressedSize =  m_cols[iField].chunks[startChunk].length * sizeof(int); 
+                Bytef *pUncompressed = static_cast<Bytef*>(CPLMalloc(uncompressedSize)); 
+                doUncompression(compression, pSubData, m_cols[iField].chunks[startChunk].compressedSize,
+                    pUncompressed, uncompressedSize);
+                int *pData = reinterpret_cast<int*>(pUncompressed);
+                
+                // copy out
+                uint64_t count = 0;
+                while( (nCopiedRows < iLength) && (count < m_cols[iField].chunks[startChunk].length) ) 
+                {
+                    pnData[nCopiedRows] = pData[nElsToSkipAtStart];
+                    nCopiedRows++;
+                    nElsToSkipAtStart++;
+                }
+                
+                CPLFree(pSubData);
+                CPLFree(pUncompressed);
+                startChunk++;
+                nElsToSkipAtStart = 0;
+            }
+            
+            while( nCopiedRows < iLength )
+            {
+                // we haven't been able to copy all the data they have requested 
+                // because that much data was never written. Pad with zeros.
+                pnData[nCopiedRows] = 0;
+                nCopiedRows++;
+            }
+            
+        }
+        
+        
+    
     }
+
     
     delete[] pn64Tmp;
     
@@ -487,7 +603,7 @@ CPLErr EMURat::ValuesIO(GDALRWFlag eRWFlag, int iField, int iStartRow, int iLeng
     if( m_cols[iField].colType != GFT_String ) 
     {
         CPLError(CE_Failure, CPLE_NotSupported,
-                "Wrong type for column %d, expected double.",
+                "Wrong type for column %d, expected string.",
                 iField);
         return CE_Failure;
     }

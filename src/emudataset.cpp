@@ -179,6 +179,9 @@ CPLErr EMUDataset::Close()
                     uint16_t val16 = nXSize;
                     VSIFWriteL(&val16, sizeof(val16), 1, m_fp);
                 }
+                
+                // RAT
+                pBand->m_rat.WriteIndex();
 
                 // metadata
                 char **ppszMetadata = pBand->GetMetadata();
@@ -428,6 +431,9 @@ GDALDataset *EMUDataset::Open(GDALOpenInfo *poOpenInfo)
             sizes.push_back(std::tuple<int, int, int>(oxsize, oysize, oblocksize));
         }
         pBand->CreateOverviews(sizes);
+
+        // RAT
+        pBand->m_rat.ReadIndex();
         
         // metadata
         uint64_t nOutputSize;
