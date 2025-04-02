@@ -812,6 +812,19 @@ GDALDataset *EMUDataset::CreateCopy( const char * pszFilename, GDALDataset *pSrc
         pDS->UpdateMetadataList();
     }
     
+    // projection
+    double adfTransform[6];
+    if( pSrcDs->GetGeoTransform(adfTransform) == CE_None )
+    {
+        pDS->SetGeoTransform(adfTransform);
+    }
+    
+    const OGRSpatialReference *pSr = pSrcDs->GetSpatialRef();
+    if( pSr != nullptr )
+    {
+        pDS->SetSpatialRef(pSr);
+    }
+    
     return pDS;
 }
 
