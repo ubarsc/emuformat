@@ -435,7 +435,7 @@ GDALDataset *EMUDataset::Open(GDALOpenInfo *poOpenInfo)
         // RAT
         pBand->m_rat.ReadIndex();
         
-        // metadata
+        // metadata - note sizes opposite order from writing
         uint64_t nOutputSize;
         VSIFReadL(&nOutputSize, sizeof(nOutputSize), 1, fp);
         EMU_U64(nOutputSize)
@@ -476,7 +476,7 @@ GDALDataset *EMUDataset::Open(GDALOpenInfo *poOpenInfo)
     pDS->SetSpatialRef(&sr);
     delete[] pszWKT;
     
-    // metadata
+    // metadata - note sizes opposite order from writing
     uint64_t val;
     VSIFReadL(&val, sizeof(val), 1, fp);
     if( val >  0)
@@ -643,12 +643,6 @@ bool CopyBand(GDALRasterBand *pSrc, GDALRasterBand *pDst, int &nDoneBlocks, int 
                 return false;
             }
             // write out
-            // For some reason, using RasterIO doesn't flush properly
-            /*if( pDst->RasterIO(GF_Write, nX, nY, nxsize, nysize, pData, nxsize, nysize, eGDALType, nPixelSize, nPixelSize * nBlockSize) != CE_None )
-            {
-                CPLError( CE_Failure, CPLE_AppDefined, "Unable to write block at %d %d\n", nX, nY );
-                return false;
-            }*/
             if( pDst->WriteBlock(nX / nBlockSize, nY / nBlockSize, pData) != CE_None )
             {
                 CPLError( CE_Failure, CPLE_AppDefined, "Unable to write block at %d %d\n", nX, nY );
@@ -752,7 +746,7 @@ GDALDataset *EMUDataset::CreateCopy( const char * pszFilename, GDALDataset *pSrc
         EMURasterBand *pDestBand = cpl::down_cast<EMURasterBand*>(pDS->GetRasterBand(n + 1));
         pDestBand->CreateOverviews(sizes);
     }
-    
+    fprintf(stderr, "total bocks %d\n", nTotalBlocks);
     // now go through each level,  and then do each band
     
     int nDoneBlocks = 0;
@@ -776,6 +770,8 @@ GDALDataset *EMUDataset::CreateCopy( const char * pszFilename, GDALDataset *pSrc
         }
     }
     
+    fprintf(stderr, "done overviews %d\n", nDoneBlocks);
+    
     // now just do the band data last
     for( int nBand = 0; nBand < nBands; nBand++ )
     {
@@ -795,6 +791,7 @@ GDALDataset *EMUDataset::CreateCopy( const char * pszFilename, GDALDataset *pSrc
             pDestBand->UpdateMetadataList();
         }
     }
+    fprintf(stderr, "done bands %d\n", nDoneBlocks);
     
     // metadata
     char **ppsz = pSrcDs->GetMetadata();

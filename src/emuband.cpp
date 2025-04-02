@@ -308,16 +308,16 @@ void EMURasterBand::UpdateMetadataList()
 {
     CPLString osWorkingResult;
     osWorkingResult.Printf( "%f", m_dMin);
-    m_papszMetadataList = CSLSetNameValue(m_papszMetadataList, "STATISTICS_MINIMUM", osWorkingResult);
+    m_papszMetadataList = CSLSetNameValue(m_papszMetadataList, STATISTICS_MINIMUM, osWorkingResult);
 
     osWorkingResult.Printf( "%f", m_dMax);
-    m_papszMetadataList = CSLSetNameValue(m_papszMetadataList, "STATISTICS_MAXIMUM", osWorkingResult);
+    m_papszMetadataList = CSLSetNameValue(m_papszMetadataList, STATISTICS_MAXIMUM, osWorkingResult);
 
     osWorkingResult.Printf( "%f", m_dMean);
-    m_papszMetadataList = CSLSetNameValue(m_papszMetadataList, "STATISTICS_MEAN", osWorkingResult);
+    m_papszMetadataList = CSLSetNameValue(m_papszMetadataList, STATISTICS_MEAN, osWorkingResult);
 
     osWorkingResult.Printf( "%f", m_dStdDev);
-    m_papszMetadataList = CSLSetNameValue(m_papszMetadataList, "STATISTICS_STDDEV", osWorkingResult);
+    m_papszMetadataList = CSLSetNameValue(m_papszMetadataList, STATISTICS_STDDEV, osWorkingResult);
 
     // TODO: STATISTICS_HISTO* from RAT (if set)
 }
@@ -327,22 +327,22 @@ CPLErr EMURasterBand::SetMetadataItem(const char *pszName, const char *pszValue,
 {
 
     bool bUpdateNeeded = false;
-    if(EQUAL(pszName, "STATISTICS_MINIMUM"))
+    if(EQUAL(pszName, STATISTICS_MINIMUM))
     {
         m_dMin = atof(pszValue);
         bUpdateNeeded = true;
     }
-    else if(EQUAL(pszName, "STATISTICS_MAXIMUM"))
+    else if(EQUAL(pszName, STATISTICS_MAXIMUM))
     {
         m_dMax = atof(pszValue);
         bUpdateNeeded = true;
     }
-    else if(EQUAL(pszName, "STATISTICS_MEAN"))
+    else if(EQUAL(pszName, STATISTICS_MEAN))
     {
         m_dMean = atof(pszValue);
         bUpdateNeeded = true;
     }
-    else if(EQUAL(pszName, "STATISTICS_STDDEV"))
+    else if(EQUAL(pszName, STATISTICS_STDDEV))
     {
         m_dStdDev = atof(pszValue);
         bUpdateNeeded = true;

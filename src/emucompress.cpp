@@ -28,9 +28,10 @@
  *
  */
  
- #include "gdal_pam.h"
+#include "gdal_pam.h"
 
- #include "emucompress.h"
+#include "emuband.h"
+#include "emucompress.h"
 
 // https://gist.github.com/arq5x/5315739
 Bytef* doCompression(int type, Bytef *pInput, size_t inputSize, size_t *pnOutputSize, bool *pbFree) 
@@ -52,7 +53,7 @@ Bytef* doCompression(int type, Bytef *pInput, size_t inputSize, size_t *pnOutput
         defstream.opaque = Z_NULL;
         defstream.avail_in = inputSize;
         defstream.next_in = pInput;
-        defstream.avail_out = inputSize;
+        defstream.avail_out = *pnOutputSize;
         defstream.next_out = pOutput;
         
         // the actual compression work.
@@ -101,13 +102,42 @@ void doUncompression(uint8_t type, Bytef *pInput, size_t inputSize, Bytef *pOutp
 
 }
 
+bool isSpecialKey(char *psz, std::set<std::string> &specialKeys)
+{
+    // is this key=value string have a key in specialKeys?
+    char *pEquals = strchr(psz, '=');
+    if( pEquals != nullptr )
+    {
+        std::string key(psz, pEquals - psz);
+
+        auto search = specialKeys.find(key);
+        return search != specialKeys.end();
+    }
+    else
+    {
+        // but weird there is no equals...
+        return false;
+    }
+}
+
 Bytef* doCompressMetadata(int type, char **papszMetadataList, size_t *pnInputSize, size_t *pnOutputSize)
 {
+    // we don't save these ones as they are saved as part of the band separately
+    std::set<std::string> specialKeys;
+    specialKeys.insert(STATISTICS_MINIMUM);
+    specialKeys.insert(STATISTICS_MAXIMUM);
+    specialKeys.insert(STATISTICS_MEAN);
+    specialKeys.insert(STATISTICS_STDDEV);
+    specialKeys.insert("CLOUD_OPTIMISED");
+
     size_t nInputSize = 0;
     int nIndex = 0;
     while( papszMetadataList[nIndex] != nullptr )
     {
-        nInputSize += (strlen(papszMetadataList[nIndex]) + 1);
+        if( !isSpecialKey(papszMetadataList[nIndex], specialKeys) )
+        {
+            nInputSize += (strlen(papszMetadataList[nIndex]) + 1);
+        }
         nIndex++;
     }
     
@@ -119,16 +149,20 @@ Bytef* doCompressMetadata(int type, char **papszMetadataList, size_t *pnInputSiz
     nIndex = 0;
     while( papszMetadataList[nIndex] != nullptr )
     {
-        pPos = stpcpy(pPos, papszMetadataList[nIndex]);
-        pPos++;
+        if( !isSpecialKey(papszMetadataList[nIndex], specialKeys) )
+        {
+            pPos = stpcpy(pPos, papszMetadataList[nIndex]);
+            pPos++; // stpcpy returns the index of the null byte so we go past that
+        }
         nIndex++;
     }
-    *pPos = '\0';
+    *pPos = '\0';  // so we have a double null at the end
     
     bool bFree;
+    *pnOutputSize = nInputSize + 100;
     Bytef *pResult = doCompression(type, reinterpret_cast<Bytef*>(pData), nInputSize, pnOutputSize, &bFree);
     *pnInputSize = nInputSize;
-
+    
     if( bFree )
     {
         CPLFree(pData);
@@ -136,14 +170,14 @@ Bytef* doCompressMetadata(int type, char **papszMetadataList, size_t *pnInputSiz
     return pResult;
 }
 
-char** doUncompressMetadata(uint8_t type, Bytef *pInput, size_t inputSize, size_t pnOutputSize)
+char** doUncompressMetadata(uint8_t type, Bytef *pInput, size_t inputSize, size_t nOutputSize)
 {
     char **pszResult = nullptr;
     
     // first uncompress into a buffer
-    char *pData = static_cast<char*>(CPLMalloc(pnOutputSize));
-    doUncompression(type, pInput, inputSize, reinterpret_cast<Bytef*>(pData), pnOutputSize);
-    
+    char *pData = static_cast<char*>(CPLMalloc(nOutputSize));
+    doUncompression(type, pInput, inputSize, reinterpret_cast<Bytef*>(pData), nOutputSize);
+
     // convert into a string array
     char *pPos = pData;
     while( *pPos != '\0')
@@ -153,6 +187,7 @@ char** doUncompressMetadata(uint8_t type, Bytef *pInput, size_t inputSize, size_
         if( pEqualPos != nullptr)
         {
             *pEqualPos = '\0';
+            //fprintf(stderr, "reading %s %s\n", pPos, pEqualPos + 1);
             pszResult = CSLSetNameValue(pszResult, pPos, pEqualPos + 1);
         }
         pPos = pNextPos;
