@@ -45,7 +45,7 @@ Bytef* doCompression(int type, Bytef *pInput, size_t inputSize, size_t *pnOutput
     }
     else if( type == COMPRESSION_ZLIB )
     {
-        Bytef *pOutput = static_cast<Bytef*>(CPLMalloc(inputSize));
+        Bytef *pOutput = static_cast<Bytef*>(CPLMalloc(*pnOutputSize));
     
         z_stream defstream;
         defstream.zalloc = Z_NULL;
@@ -141,9 +141,16 @@ Bytef* doCompressMetadata(int type, char **papszMetadataList, size_t *pnInputSiz
         nIndex++;
     }
     
+    if( nInputSize == 0 )
+    {
+        *pnInputSize = 0;
+        *pnOutputSize = 0;
+        return nullptr;
+    }
+    
     // another one for the double null at the end
     nInputSize++;
-    
+
     char *pData = static_cast<char*>(CPLMalloc(nInputSize));
     char *pPos = pData;
     nIndex = 0;
@@ -187,7 +194,6 @@ char** doUncompressMetadata(uint8_t type, Bytef *pInput, size_t inputSize, size_
         if( pEqualPos != nullptr)
         {
             *pEqualPos = '\0';
-            //fprintf(stderr, "reading %s %s\n", pPos, pEqualPos + 1);
             pszResult = CSLSetNameValue(pszResult, pPos, pEqualPos + 1);
         }
         pPos = pNextPos;

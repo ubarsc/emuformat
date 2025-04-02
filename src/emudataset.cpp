@@ -191,9 +191,13 @@ CPLErr EMUDataset::Close()
                     Bytef *pCompressed = doCompressMetadata(COMPRESSION_ZLIB, ppszMetadata, &nInputSize, &nOutputSize);
                     val = nInputSize;
                     VSIFWriteL(&val, sizeof(val), 1, m_fp);
-                    val = nOutputSize;
-                    VSIFWriteL(&val, sizeof(val), 1, m_fp);
-                    VSIFWriteL(pCompressed, nOutputSize, 1, m_fp);
+                    if( nInputSize > 0 )
+                    {
+                        val = nOutputSize;
+                        VSIFWriteL(&val, sizeof(val), 1, m_fp);
+                        VSIFWriteL(pCompressed, nOutputSize, 1, m_fp);
+                        CPLFree(pCompressed);
+                    }
                 }
                 else
                 {
@@ -231,10 +235,13 @@ CPLErr EMUDataset::Close()
                 Bytef *pCompressed = doCompressMetadata(COMPRESSION_ZLIB, ppszMetadata, &nInputSize, &nOutputSize);
                 val = nInputSize;
                 VSIFWriteL(&val, sizeof(val), 1, m_fp);
-                val = nOutputSize;
-                VSIFWriteL(&val, sizeof(val), 1, m_fp);
-                VSIFWriteL(pCompressed, nOutputSize, 1, m_fp);
-                CPLFree(pCompressed);
+                if( nInputSize > 0 )
+                {   
+                    val = nOutputSize;
+                    VSIFWriteL(&val, sizeof(val), 1, m_fp);
+                    VSIFWriteL(pCompressed, nOutputSize, 1, m_fp);
+                    CPLFree(pCompressed);
+                }
             }
             else
             {
@@ -619,7 +626,7 @@ bool CopyBand(GDALRasterBand *pSrc, GDALRasterBand *pDst, int &nDoneBlocks, int 
     int nPixelSize = GDALGetDataTypeSize( eGDALType ) / 8;
     void *pData = CPLMalloc( nPixelSize * nBlockSize * nBlockSize);
     double dLastFraction = -1;
-
+    
     // go through the image
     for( unsigned int nY = 0; nY < nYSize; nY += nBlockSize )
     {
@@ -683,7 +690,15 @@ GDALDataset *EMUDataset::CreateCopy( const char * pszFilename, GDALDataset *pSrc
     int nXSize = pSrcDs->GetRasterXSize();
     int nYSize = pSrcDs->GetRasterYSize();
     int nBands = pSrcDs->GetRasterCount();
-    GDALDataType eType = pSrcDs->GetRasterBand(1)->GetRasterDataType();
+    GDALRasterBand *pFirstBand = pSrcDs->GetRasterBand(1);
+    GDALDataType eType = pFirstBand->GetRasterDataType();
+    int nBlockXsize, nBlockYsize;
+    pFirstBand->GetBlockSize(&nBlockXsize, &nBlockYsize);
+    if( nBlockXsize != nBlockYsize)
+    {
+        CPLError( CE_Failure, CPLE_AppDefined, "Block sizes must be square\n");
+        return nullptr;
+    }
 
     VSILFILE *fp = CreateEMU(pszFilename, nXSize, nYSize, nBands, eType);
     if( fp == NULL )
@@ -698,10 +713,10 @@ GDALDataset *EMUDataset::CreateCopy( const char * pszFilename, GDALDataset *pSrc
     uint32_t nFlags = 1;  // COG
     VSIFWriteL(&nFlags, sizeof(nFlags), 1, fp);
     
-    EMUDataset *pDS = new EMUDataset(fp, eType, nXSize, nYSize, GA_Update, true, DFLT_TILESIZE);
+    EMUDataset *pDS = new EMUDataset(fp, eType, nXSize, nYSize, GA_Update, true, nBlockXsize);
     for( int n = 0; n < nBands; n++ )
     {
-        pDS->SetBand(n + 1, new EMURasterBand(pDS, n + 1, eType, nXSize, nYSize, DFLT_TILESIZE, pDS->m_mutex));
+        pDS->SetBand(n + 1, new EMURasterBand(pDS, n + 1, eType, nXSize, nYSize, nBlockXsize, pDS->m_mutex));
     }
     
     // find the highest overview level
@@ -715,11 +730,11 @@ GDALDataset *EMUDataset::CreateCopy( const char * pszFilename, GDALDataset *pSrc
         {
             nMaxOverview = nOverviews;
         }
-        int nBlockXsize, nBlockYsize;
-        pSrcBand->GetBlockSize(&nBlockXsize, &nBlockYsize);
-        if( nBlockXsize != nBlockYsize)
+        int nBandBlockXsize, nBandBlockYsize;
+        pSrcBand->GetBlockSize(&nBandBlockXsize, &nBandBlockYsize);
+        if( (nBandBlockXsize != nBlockXsize) || (nBandBlockYsize != nBlockYsize) )
         {
-            CPLError( CE_Failure, CPLE_AppDefined, "Block sizes must be square\n");
+            CPLError( CE_Failure, CPLE_AppDefined, "Bands must have all the same block sizes\n");
             return nullptr;
         }
         
@@ -746,7 +761,6 @@ GDALDataset *EMUDataset::CreateCopy( const char * pszFilename, GDALDataset *pSrc
         EMURasterBand *pDestBand = cpl::down_cast<EMURasterBand*>(pDS->GetRasterBand(n + 1));
         pDestBand->CreateOverviews(sizes);
     }
-    fprintf(stderr, "total bocks %d\n", nTotalBlocks);
     // now go through each level,  and then do each band
     
     int nDoneBlocks = 0;
@@ -770,8 +784,6 @@ GDALDataset *EMUDataset::CreateCopy( const char * pszFilename, GDALDataset *pSrc
         }
     }
     
-    fprintf(stderr, "done overviews %d\n", nDoneBlocks);
-    
     // now just do the band data last
     for( int nBand = 0; nBand < nBands; nBand++ )
     {
@@ -791,7 +803,6 @@ GDALDataset *EMUDataset::CreateCopy( const char * pszFilename, GDALDataset *pSrc
             pDestBand->UpdateMetadataList();
         }
     }
-    fprintf(stderr, "done bands %d\n", nDoneBlocks);
     
     // metadata
     char **ppsz = pSrcDs->GetMetadata();
