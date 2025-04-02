@@ -17,7 +17,6 @@ It is designed to be written by:
 
 1. RIOS, in particular version 2.0.5 and above
 with the on-the-fly statistics and pyramid layers enabled (the default). 
-Furthermore with RIOS, the blocksize must be set to 512x512.
 
 2. gdal_translate -of EMU from another GDAL supported format. If available,
 the statistics and pyramid layers will be copied across from the input file.
@@ -30,16 +29,15 @@ It doesn't (and will not) support update of files in place.
 
 A general format for imagery. See the KEA format for a better alternative.
 
-## TODOs
+## Implemented Features
 
-- Histograms
-- RAT
-- Calculation of pyramid layers on writing.
+- Overviews
+- Statistics
+- Metadata
+- Raster Attribute Tables (but implementation incomplete)
+- Projections
 
 ## FAQ's
-
-Q. Should I use this operationally?
-A. Absolutely not
 
 Q. Does it work under Windows?
 A. Dunno
@@ -58,4 +56,5 @@ cmake -D CMAKE_INSTALL_PREFIX=$CONDA_PREFIX ..
 make
 make install
 ```
-
+On Ubuntu, the recipe is similar. Ensure you have `libgdal-dev` and `g++` packages installed.
+Set the `GDAL_DRIVER_PATH` env var to the location of the installed library.
