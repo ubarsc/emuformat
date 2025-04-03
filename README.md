@@ -16,10 +16,18 @@ being translated into GeoTiff or KEA for distribution.
 It is designed to be written by:
 
 1. RIOS, in particular version 2.0.5 and above
-with the on-the-fly statistics and pyramid layers enabled (the default). 
+with the on-the-fly statistics and overview layers enabled (the default). 
 
-2. gdal_translate -of EMU from another GDAL supported format. If available,
+Files created in this way will have CLOUD_OPTIMISED=FALSE set in the dataset
+metadata to show that the overviews are distributed within the file.
+
+2. gdal_translate -of EMU from any GDAL supported format (including EMU). If available,
 the statistics and pyramid layers will be copied across from the input file.
+
+Files created in this way will have CLOUD_OPTIMISED=TRUE set in the dataset
+metadata to show that the overviews are all saved to the start of the file
+which should allow faster display.
+
 
 Other methods may result in errors or corruption of data. 
 
