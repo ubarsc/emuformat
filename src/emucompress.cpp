@@ -120,6 +120,16 @@ bool isSpecialKey(char *psz, std::set<std::string> &specialKeys)
     }
 }
 
+// implementation not available on Windows
+#ifdef _MSC_VER
+char *
+stpcpy (char *dst, const char *src)
+{
+  const size_t len = strlen (src);
+  return (char *) memcpy (dst, src, len + 1) + len;
+}
+#endif
+
 Bytef* doCompressMetadata(int type, char **papszMetadataList, size_t *pnInputSize, size_t *pnOutputSize)
 {
     // we don't save these ones as they are saved as part of the band separately
