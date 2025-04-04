@@ -5,6 +5,7 @@ on:
     branches: [ master ]
   pull_request:
     branches: [ master ]
+  workflow_dispatch
 
 jobs:
   build-linux:
@@ -74,4 +75,4 @@ jobs:
         nmake install
     - name: check gdal
       shell: bash -el {0}
-      run: gdal_translate --formats | grep EMU 
+      run: gdal_translate --formats | grep EMU
