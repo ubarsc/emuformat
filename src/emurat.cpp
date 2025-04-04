@@ -590,6 +590,16 @@ CPLErr EMURat::ValuesIO(GDALRWFlag eRWFlag, int iField, int iStartRow, int iLeng
     
 }
 
+// implementation not available on Windows
+#ifdef _MSC_VER
+char *
+stpcpy (char *dst, const char *src)
+{
+  const size_t len = strlen (src);
+  return (char *) memcpy (dst, src, len + 1) + len;
+}
+#endif
+
 CPLErr EMURat::ValuesIO(GDALRWFlag eRWFlag, int iField, int iStartRow, int iLength, char **papszStrList)
 {
     if( (iField < 0) || (iField > m_cols.size()))
