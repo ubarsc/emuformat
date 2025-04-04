@@ -18,7 +18,7 @@ find_package(ZLIB REQUIRED)
 option (BUILD_SHARED_LIBS "Build with shared library" ON)
 
 include_directories("include")
-add_library(gdal_EMU src/emudataset.cpp src/emuband.cpp src/emucompress.cpp src/emurat.cpp
+add_library(gdal_EMU src/emudriver.cpp src/emudataset.cpp src/emuband.cpp src/emucompress.cpp src/emurat.cpp
     include/emudataset.h include/emuband.h include/emucompress.h include/emurat.h)
 # remove the leading "lib" as GDAL won't look for files with this prefix
 set_target_properties(gdal_EMU PROPERTIES PREFIX "")

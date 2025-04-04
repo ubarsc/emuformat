@@ -995,35 +995,3 @@ CPLErr EMUDataset::SetMetadata(char **papszMetadata, const char *pszDomain)
     }
     return CE_None;
 }
-
-CPL_C_START
-void CPL_DLL GDALRegister_EMU(void);
-CPL_C_END
-
-void GDALRegister_EMU()
-{
-    if( !GDAL_CHECK_VERSION("EMU") )
-        return;
-
-    if( GDALGetDriverByName("EMU") != nullptr )
-        return;
-    
-    GDALDriver *poDriver = new GDALDriver();
-
-    poDriver->SetDescription("EMU");
-    poDriver->SetMetadataItem(GDAL_DCAP_RASTER, "YES");
-    poDriver->SetMetadataItem(GDAL_DMD_LONGNAME, "UBARSC Streaming Format (.emu)");
-    poDriver->SetMetadataItem(GDAL_DMD_EXTENSIONS, "emu");
-    poDriver->SetMetadataItem(GDAL_DCAP_VIRTUALIO, "YES");
-    poDriver->SetMetadataItem(GDAL_DCAP_CREATE, "YES");
-    poDriver->SetMetadataItem(GDAL_DCAP_CREATECOPY, "YES");
-    poDriver->SetMetadataItem(GDAL_DMD_CREATIONDATATYPES, 
-            "Byte Int8 Int16 UInt16 Int32 UInt32 Int64 UInt64 Float32 Float64");
-
-    poDriver->pfnOpen = EMUDataset::Open;
-    poDriver->pfnIdentify = EMUDataset::Identify;
-    poDriver->pfnCreate = EMUDataset::Create;
-    poDriver->pfnCreateCopy = EMUDataset::CreateCopy;
-
-    GetGDALDriverManager()->RegisterDriver(poDriver);
-}
