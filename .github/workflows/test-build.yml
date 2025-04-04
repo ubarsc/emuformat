@@ -1,0 +1,77 @@
+name: Test Build
+
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+    branches: [ master ]
+
+jobs:
+  build-linux:
+    name: Test Linux
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v2
+    - uses: conda-incubator/setup-miniconda@v2
+      with:
+        miniforge-version: latest
+    - name: Install Dependencies
+      shell: bash -l {0}
+      run: |
+        conda install cmake cxx-compiler libgdal
+    - name: Cmake
+      shell: bash -l {0}
+      run: |
+        mkdir build
+        cd build
+        cmake -D CMAKE_INSTALL_PREFIX=$CONDA_PREFIX -D CMAKE_PREFIX_PATH=$CONDA_PREFIX ..
+    - name: make
+      shell: bash -l {0}
+      run: |
+        cd build
+        make
+    - name: make install
+      shell: bash -l {0}
+      run: |
+        cd build
+        make install
+    - name: check gdal
+      shell: bash -l {0}
+      run: gdal_translate --formats | grep EMU
+    
+  build-windows:
+    name: Test Windows
+    runs-on: windows-latest
+    
+    steps:
+    - uses: actions/checkout@v2
+    - uses: conda-incubator/setup-miniconda@v2
+      with:
+        miniforge-version: latest
+    - uses: egor-tensin/vs-shell@v2
+      with:
+        arch: x64    
+    - name: Install Dependencies
+      shell: bash -el {0}
+      run: |
+        conda install cmake libgdal 
+    - name: Cmake
+      shell: bash -el {0}
+      run: |
+        mkdir build
+        cd build
+        cmake -G "NMake Makefiles" -D CMAKE_BUILD_TYPE=Release -D CMAKE_INSTALL_PREFIX=$CONDA_PREFIX/Library -D CMAKE_PREFIX_PATH=$CONDA_PREFIX/Library ..
+    - name: nmake
+      shell: bash -el {0}
+      run: |
+        cd build
+        nmake
+    - name: nmake install
+      shell: bash -el {0}
+      run: |
+        cd build
+        nmake install
+    - name: check gdal
+      shell: bash -el {0}
+      run: gdal_translate --formats | grep EMU

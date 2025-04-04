@@ -56,7 +56,7 @@ A. No
 Q. How to build?
 A. On Linux conda:
 ```
-conda create -n emu cmake cxx-compiler gdal
+conda create -n emu cmake cxx-compiler libgdal
 conda activate emu
 mkdir build
 cd build
