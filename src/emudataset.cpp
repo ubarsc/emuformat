@@ -802,6 +802,77 @@ GDALDataset *EMUDataset::CreateCopy( const char * pszFilename, GDALDataset *pSrc
             pDestBand->SetMetadata(ppsz);
             pDestBand->UpdateMetadataList();
         }
+        
+        // RAT
+        GDALRasterAttributeTable *pinRAT = pSrcBand->GetDefaultRAT();
+        if( pinRAT != nullptr )
+        {
+            GDALRasterAttributeTable *outRAT = pDestBand->GetDefaultRAT();
+            int nRowCount = pinRAT->GetRowCount();
+            outRAT->SetRowCount(nRowCount);
+            
+            // buffers
+            int nData[MAX_RAT_CHUNK];
+            double dData[MAX_RAT_CHUNK];
+            char *pszData[MAX_RAT_CHUNK];
+            
+            // create output columns
+            for( int nCol = 0; nCol < pinRAT->GetColumnCount(); nCol++)
+            {
+                const char *pszColName = pinRAT->GetNameOfCol(nCol);
+                GDALRATFieldType eType = pinRAT->GetTypeOfCol(nCol);
+                GDALRATFieldUsage eUsage = pinRAT->GetUsageOfCol(nCol);
+                
+                outRAT->CreateColumn(pszColName, eType, eUsage);
+                
+                // copy data
+                int nRowsLeft = nRowCount;
+                int nRow = 0;
+                if( eType == GFT_Integer )
+                {
+                    while( nRowsLeft > 0 )
+                    {
+                        int nChunkSize = std::min(nRowsLeft, MAX_RAT_CHUNK);
+                        pinRAT->ValuesIO(GF_Read, nCol, nRow, nChunkSize, nData);
+                        outRAT->ValuesIO(GF_Write, nCol, nRow, nChunkSize, nData);
+                        nRowsLeft -= nChunkSize;
+                        nRow += nChunkSize;
+                    }
+                }
+                else if( eType == GFT_Real )
+                {
+                    while( nRowsLeft > 0 )
+                    {
+                        int nChunkSize = std::min(nRowsLeft, MAX_RAT_CHUNK);
+                        pinRAT->ValuesIO(GF_Read, nCol, nRow, nChunkSize, dData);
+                        outRAT->ValuesIO(GF_Write, nCol, nRow, nChunkSize, dData);
+                        nRowsLeft -= nChunkSize;
+                        nRow += nChunkSize;
+                    }
+                }
+                else if( eType == GFT_String )
+                {
+                    while( nRowsLeft > 0 )
+                    {
+                        int nChunkSize = std::min(nRowsLeft, MAX_RAT_CHUNK);
+                        pinRAT->ValuesIO(GF_Read, nCol, nRow, nChunkSize, pszData);
+                        outRAT->ValuesIO(GF_Write, nCol, nRow, nChunkSize, pszData);
+                        nRowsLeft -= nChunkSize;
+                        nRow += nChunkSize;
+                        // free
+                        for( int n = 0; n < nChunkSize; n++ )
+                        {
+                            CPLFree(pszData[n]);
+                        }
+                    }
+                }
+                else
+                {
+                    fprintf(stderr, "Unknown column type\n");
+                }
+            }
+            
+        }
     }
     
     // metadata

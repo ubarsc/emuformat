@@ -39,6 +39,8 @@
 
 #include "emudataset.h"
 
+const int MAX_RAT_CHUNK = 256 * 256;
+
 class EMURasterBand;
 
 struct EMURatChunk

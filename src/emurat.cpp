@@ -34,7 +34,6 @@
 
 #include <algorithm> 
 
-const int MAX_RAT_CHUNK = 256 * 256;
 
 EMURat::EMURat(EMUDataset *pDS, EMURasterBand *pBand, const std::shared_ptr<std::mutex>& other)
 {
@@ -371,6 +370,7 @@ CPLErr EMURat::ValuesIO(GDALRWFlag eRWFlag, int iField, int iStartRow, int iLeng
                     pdfData[nCopiedRows] = pData[nElsToSkipAtStart];
                     nCopiedRows++;
                     nElsToSkipAtStart++;
+                    count++;
                 }
                 
                 CPLFree(pSubData);
@@ -551,7 +551,7 @@ CPLErr EMURat::ValuesIO(GDALRWFlag eRWFlag, int iField, int iStartRow, int iLeng
                 Bytef *pUncompressed = static_cast<Bytef*>(CPLMalloc(uncompressedSize)); 
                 doUncompression(compression, pSubData, m_cols[iField].chunks[startChunk].compressedSize,
                     pUncompressed, uncompressedSize);
-                int *pData = reinterpret_cast<int*>(pUncompressed);
+                uint64_t *pData = reinterpret_cast<uint64_t*>(pUncompressed);
                 
                 // copy out
                 uint64_t count = 0;
@@ -560,6 +560,7 @@ CPLErr EMURat::ValuesIO(GDALRWFlag eRWFlag, int iField, int iStartRow, int iLeng
                     pnData[nCopiedRows] = pData[nElsToSkipAtStart];
                     nCopiedRows++;
                     nElsToSkipAtStart++;
+                    count++;
                 }
                 
                 CPLFree(pSubData);
@@ -689,11 +690,73 @@ CPLErr EMURat::ValuesIO(GDALRWFlag eRWFlag, int iField, int iStartRow, int iLeng
     }
     else
     {
+        bool bFound = false;
+        size_t startChunk = 0;
+        uint64_t nElsToSkipAtStart = 0;
         uint64_t nCopiedRows = 0;
-        while(nCopiedRows < iLength)
+        for( size_t n = 0; n < m_cols[iField].chunks.size(); n++)
         {
-            papszStrList[nCopiedRows] = CPLStrdup("Hello");
-            nCopiedRows++;
+            if(m_cols[iField].chunks[n].startIdx <= iStartRow )
+            {
+                startChunk = n;
+                nElsToSkipAtStart = iStartRow - m_cols[iField].chunks[n].startIdx;
+                bFound = true;
+                break;
+            }
+        }
+        
+        if( bFound )
+        {
+            while( (nCopiedRows <  iLength) && (startChunk < m_cols[iField].chunks.size()) )
+            {
+                // seek to where this block starts    
+                VSIFSeekL(m_pEMUDS->m_fp, m_cols[iField].chunks[startChunk].offset, SEEK_SET);
+    
+                // read compression type
+                uint8_t compression;
+                VSIFReadL(&compression, sizeof(compression), 1, m_pEMUDS->m_fp);
+    
+                // read the uncompressed data
+                Bytef *pSubData = static_cast<Bytef*>(CPLMalloc(m_cols[iField].chunks[startChunk].compressedSize));
+                VSIFReadL(pSubData, m_cols[iField].chunks[startChunk].compressedSize, 1, m_pEMUDS->m_fp);
+                
+                uint64_t uncompressedSize =  m_cols[iField].chunks[startChunk].length * sizeof(int); 
+                Bytef *pUncompressed = static_cast<Bytef*>(CPLMalloc(uncompressedSize)); 
+                doUncompression(compression, pSubData, m_cols[iField].chunks[startChunk].compressedSize,
+                    pUncompressed, uncompressedSize);
+                char *pszStringData = reinterpret_cast<char*>(pUncompressed);
+                char *pszCurrentSrc = pszStringData;
+                while( nElsToSkipAtStart > 0 )
+                {
+                    // go to next string
+                    pszCurrentSrc += (strlen(pszCurrentSrc) + 1);
+                    nElsToSkipAtStart--;
+                }
+                
+                // copy out
+                uint64_t count = 0;
+                while( (nCopiedRows < iLength) && (count < m_cols[iField].chunks[startChunk].length) ) 
+                {
+                    papszStrList[nCopiedRows] = CPLStrdup(pszCurrentSrc);
+                    // go to next string
+                    pszCurrentSrc += (strlen(pszCurrentSrc) + 1);
+                    nCopiedRows++;
+                    count++;
+                }
+                
+                CPLFree(pSubData);
+                CPLFree(pUncompressed);
+                startChunk++;
+            }
+            
+            while( nCopiedRows < iLength )
+            {
+                // we haven't been able to copy all the data they have requested 
+                // because that much data was never written. Pad with empty string.
+                papszStrList[nCopiedRows] = CPLStrdup("");
+                nCopiedRows++;
+            }
+            
         }
     }
     
