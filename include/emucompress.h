@@ -44,7 +44,7 @@ Bytef* doCompressMetadata(int type, char **papszMetadataList, size_t *pnInputSiz
 char** doUncompressMetadata(uint8_t type, Bytef *pInput, size_t inputSize, size_t pnOutputSize);
 
 #ifdef _MSC_VER
-char *stpcpy (char *dst, const char *src)
+char *stpcpy (char *dst, const char *src);
 #endif
 
 #endif //EMUCOMPRESS_H
