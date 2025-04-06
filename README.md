@@ -2,7 +2,7 @@
 
 ## What is this?
 
-An experimental format that can be streamed to S3 (and read from s3 efficiently). 
+An experimental imagery format that can be streamed to S3 (and read from s3 efficiently). 
 It only supports a subset of GDAL features. It is envisaged this will only be of use
 to people using AWS Batch who are sick of having to expand the local storage
 using a LaunchTemplate to accomodate other formats that must be written 
@@ -31,7 +31,14 @@ which should allow faster display.
 
 Other methods may result in errors or corruption of data. 
 
-It doesn't (and will not) support update of files in place. 
+It doesn't (and cannot) support update of files in place. 
+
+Note that the header (on this case, "trailer") is always written to the end of the file
+so opening performance will be slower than other formats.
+
+This repo contains code for a GDAL plugin that supports the format. This driver must be
+compiled and installed and the `GDAL_DRIVER_PATH` env var must be set to the location
+of installation before GDAL will recognise EMU.
 
 ## What is this not?
 
@@ -48,7 +55,7 @@ A general format for imagery. See the KEA format for a better alternative.
 ## FAQ's
 
 Q. Does it work under Windows?
-A. Dunno
+A. It compiles, but hasn't been tested.
 
 Q. Are you going to add support for other features not already covered above?
 A. No

@@ -551,7 +551,8 @@ CPLErr EMURat::ValuesIO(GDALRWFlag eRWFlag, int iField, int iStartRow, int iLeng
                 Bytef *pUncompressed = static_cast<Bytef*>(CPLMalloc(uncompressedSize)); 
                 doUncompression(compression, pSubData, m_cols[iField].chunks[startChunk].compressedSize,
                     pUncompressed, uncompressedSize);
-                uint64_t *pData = reinterpret_cast<uint64_t*>(pUncompressed);
+                // stored as int64 internally
+                int64_t *pData = reinterpret_cast<int64_t*>(pUncompressed);
                 
                 // copy out
                 uint64_t count = 0;
