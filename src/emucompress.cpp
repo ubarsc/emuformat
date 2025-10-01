@@ -33,6 +33,8 @@
 #include "emuband.h"
 #include "emucompress.h"
 
+#include <set>
+
 // https://gist.github.com/arq5x/5315739
 Bytef* doCompression(int type, Bytef *pInput, size_t inputSize, size_t *pnOutputSize, bool *pbFree) 
 {
